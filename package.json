@@ -1,0 +1,19 @@
+{
+  "name": "agent-panel",
+  "version": "0.1.0",
+  "description": "A framework-free Web Component chat panel for AI agents: transcript, composer, paste/drop attachments.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./element": "./agent-panel.js",
+    "./attachments": "./attachments.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": ["*.js", "*.mjs", "README.md", "AGENTS.md", "CLAUDE.md"],
+  "sideEffects": ["./index.js"],
+  "keywords": ["web-component", "custom-element", "chat", "ai", "agent"],
+  "repository": { "type": "git", "url": "git+https://github.com/compdani/agent-panel.git" },
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}
