@@ -1,20 +1,38 @@
 {
   "name": "agent-panel",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Framework-free Web Components for AI agent chat: <agent-panel> (side panel) and <agent-page> (full page with conversations). Paste/drop attachments, mentions, references.",
   "type": "module",
   "main": "./index.js",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./index.js",
-    "./element": "./agent-panel.js",
-    "./page": "./page.js",
-    "./page-element": "./agent-page.js",
-    "./attachments": "./attachments.mjs",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./element": {
+      "types": "./element.d.ts",
+      "default": "./agent-panel.js"
+    },
+    "./page": {
+      "types": "./page.d.ts",
+      "default": "./page.js"
+    },
+    "./page-element": {
+      "types": "./page-element.d.ts",
+      "default": "./agent-page.js"
+    },
+    "./attachments": {
+      "types": "./attachments.d.mts",
+      "default": "./attachments.mjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "*.js",
     "*.mjs",
+    "*.d.ts",
+    "*.d.mts",
     "README.md",
     "AGENTS.md",
     "CLAUDE.md"
@@ -39,6 +57,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "check-types": "npx -y -p typescript@5.6.3 tsc -p test/tsconfig.json && npx -y -p typescript@5.6.3 tsc -p test/tsconfig.json --module ESNext --moduleResolution Bundler"
   }
 }

@@ -115,7 +115,7 @@ export class AgentPanelElement extends Base {
 
   static get observedAttributes() {
     return ['heading', 'placeholder', 'hint', 'empty-title', 'empty-text', 'running', 'disabled', 'closable',
-      'no-attachments', 'accept', 'error'];
+      'no-attachments', 'accept', 'error', 'allow-empty-text'];
   }
 
   static define(tag = this.tagName, registry = globalThis.customElements) {
@@ -130,6 +130,7 @@ export class AgentPanelElement extends Base {
     this._entries = [];
     this._suggestions = [];
     this._attachments = [];
+    this._attachmentStates = new Map();
     this._references = [];
     this._mention = null;
     this._labels = { ...this.constructor.defaultLabels };
@@ -288,6 +289,7 @@ export class AgentPanelElement extends Base {
     const item = this._attachments.find((a) => a.id === id);
     if (!item) return;
     this._attachments = this._attachments.filter((a) => a !== item);
+    this._attachmentStates.delete(id);
     if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
     this._attachError = '';
     this._attachmentsChanged();
@@ -298,8 +300,27 @@ export class AgentPanelElement extends Base {
     if (!this._attachments.length) return;
     this._attachments.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
     this._attachments = [];
+    this._attachmentStates.clear();
     this._attachError = '';
     this._attachmentsChanged();
+    this._schedule();
+  }
+
+  // Marks an attachment's chip as uploading ({ busy: true }) or failed ({ error: 'why' }).
+  // Pass null (or {}) to return the chip to normal.
+  setAttachmentState(id, state) {
+    if (!this._attachments.some((a) => a.id === id)) return;
+    const busy = Boolean(state?.busy);
+    const error = state?.error ? String(state.error) : '';
+    const item = this._attachments.find((a) => a.id === id);
+    if (busy || error) {
+      this._attachmentStates.set(id, { busy, error });
+      item.state = { busy, error };
+    }
+    else {
+      this._attachmentStates.delete(id);
+      delete item.state;
+    }
     this._schedule();
   }
 
@@ -346,19 +367,25 @@ export class AgentPanelElement extends Base {
   submit(text) {
     const fromDraft = text === undefined;
     const message = String(fromDraft ? this.draft : text).trim();
-    if (!message || this.running || this.disabled) return false;
-    const accepted = this._emit('agent-submit', { text: message, attachments: this.attachments, references: this.references }, { cancelable: true });
-    if (accepted) {
-      if (fromDraft) this.draft = '';
-      if (!this.hasAttribute('sticky-attachments')) this.clearAttachments();
-      if (this._references.length) {
-        this._references = [];
-        this._referencesChanged();
-      }
-      this.closeMention();
-      this.scrollToBottom({ force: true });
-    }
+    if (this.running || this.disabled || !(message || (fromDraft && this._canSendEmpty()))) return false;
+    const accepted = this._emit('agent-submit', {
+      text: message, attachments: this.attachments, references: this.references, fromDraft,
+    }, { cancelable: true });
+    if (accepted) this.clearComposer({ draft: fromDraft, attachments: !this.hasAttribute('sticky-attachments') });
     return accepted;
+  }
+
+  // The cleanup an accepted submit does, for hosts that cancel `agent-submit` and send
+  // later (e.g. after uploading). Each part can be kept by passing false.
+  clearComposer({ draft = true, attachments = true, references = true } = {}) {
+    if (draft) this.draft = '';
+    if (attachments) this.clearAttachments();
+    if (references && this._references.length) {
+      this._references = [];
+      this._referencesChanged();
+    }
+    this.closeMention();
+    this.scrollToBottom({ force: true });
   }
 
   focus(options) { this.$input.focus(options); }
@@ -509,6 +536,11 @@ export class AgentPanelElement extends Base {
   _referencesChanged() {
     this._emit('agent-references-change', { references: this.references });
     this._schedule();
+  }
+
+  // With `allow-empty-text`, attachments or references alone are enough to send.
+  _canSendEmpty() {
+    return this.hasAttribute('allow-empty-text') && (this._attachments.length > 0 || this._references.length > 0);
   }
 
   _trigger() {
@@ -766,21 +798,35 @@ export class AgentPanelElement extends Base {
     this.$attach.disabled = this.disabled;
     this.$stop.hidden = !this.running;
     this.$send.hidden = this.running;
-    this.$send.disabled = this.disabled || !this.draft.trim();
+    this.$send.disabled = this.disabled || !(this.draft.trim() || this._canSendEmpty());
   }
 
   _renderChips() {
-    this.$fileChips.replaceChildren(...this._attachments.map((item) => h(
-      'span',
-      {
-        class: ['chip', item.previewUrl && 'chip--image'], part: 'attachment', title: `${item.name} · ${formatBytes(item.size)}`, 'data-attachment-id': item.id,
-      },
-      item.previewUrl ? h('img', { class: 'thumb', src: item.previewUrl, alt: '' }) : icon(item.type.startsWith('image/') ? 'image' : 'file', 14),
-      h('span', { class: 'chip-label' }, item.name),
-      h('button', {
-        type: 'button', class: 'chip-x', 'aria-label': `${this._labels.remove} ${item.name}`, onClick: () => this.removeAttachment(item.id),
-      }, icon('close', 12)),
-    )));
+    this.$fileChips.replaceChildren(...this._attachments.map((item) => {
+      const state = this._attachmentStates.get(item.id);
+      let lead = item.previewUrl ? h('img', { class: 'thumb', src: item.previewUrl, alt: '' }) : icon(item.type.startsWith('image/') ? 'image' : 'file', 14);
+      if (state?.busy) lead = h('span', { class: 'spinner', role: 'status', 'aria-label': this._labels.working });
+      else if (state?.error) lead = icon('alert', 14);
+      return h(
+        'span',
+        {
+          class: ['chip', item.previewUrl && !state?.busy && !state?.error && 'chip--image', state?.error && 'chip--error'],
+          part: 'attachment',
+          title: state?.error ? `${item.name}: ${state.error}` : `${item.name} · ${formatBytes(item.size)}`,
+          'data-attachment-id': item.id,
+          'data-state': state?.busy ? 'busy' : (state?.error ? 'error' : null),
+        },
+        lead,
+        h('span', { class: 'chip-label' }, item.name),
+        h('button', {
+          type: 'button',
+          class: 'chip-x',
+          'aria-label': `${this._labels.remove} ${item.name}`,
+          disabled: Boolean(state?.busy),
+          onClick: () => this.removeAttachment(item.id),
+        }, icon('close', 12)),
+      );
+    }));
   }
 
   // Keyed by entry id: unchanged entries keep their nodes (and open <details>).

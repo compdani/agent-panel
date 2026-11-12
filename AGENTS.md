@@ -56,6 +56,7 @@ the code and this file disagree, fix one of them in the same change.
 | `icons.js` | `ICONS`: MDI SVG paths (Apache-2.0), keyed `paperclip, send, stop, close, chevron, check, alert, file, image, upload, at, link, history, plus, delete` |
 | `index.js` | Defines `<agent-panel>` and re-exports everything from `agent-panel.js` and `attachments.mjs`. This is the package's main entry, `agent-panel` |
 | `page.js` | Defines `<agent-page>` and re-exports `agent-page.js`, the panel's `AgentPanelElement`, `h`, `icon` and `referenceKey`, and `attachments.mjs`. Exported as `agent-panel/page` |
+| `attachments.d.mts`, `element.d.ts`, `page-element.d.ts`, `index.d.ts`, `page.d.ts` | Type declarations matching the entry points |
 | `test/attachments.test.mjs` | Node tests for `attachments.mjs` (`npm test`) |
 | `package.json` | `type: module`, the `exports` map, no dependencies. Apps install it with `npm install github:compdani/agent-panel#vX.Y.Z` |
 
@@ -79,6 +80,7 @@ interface Attachment {
   file: File;            // renamed copy when the name was generated or made unique
   name: string; type: string; size: number; pasted: boolean;
   previewUrl: string;    // blob: URL for image/*, else ""; revoked on removal
+  state?: { busy?: boolean; error?: string };
   base64(): Promise<string>; // no data: prefix; memoized
 }
 
@@ -118,6 +120,8 @@ declare class AgentPanelElement extends HTMLElement {
   running: boolean; disabled: boolean; closable: boolean; // reflect boolean attributes
 
   submit(text?: string): boolean;
+  clearComposer(opts?: { draft?: boolean; attachments?: boolean; references?: boolean }): void;
+  setAttachmentState(id: string, state: { busy?: boolean; error?: string } | null): void;
   addFiles(files: Iterable<File> | FileList, opts?: { pasted?: boolean }): { added: Attachment[]; problems: string[] };
   removeAttachment(id: string): void;
   clearAttachments(): void;
@@ -165,7 +169,7 @@ declare function icon(nameOrPath: keyof typeof ICONS | string, size?: number, cl
 | Attribute | Observed (redraws on change) | Read when |
 |---|---|---|
 | `heading`, `placeholder`, `hint`, `empty-title`, `empty-text` | yes | each redraw |
-| `running`, `disabled`, `closable`, `error`, `no-attachments`, `accept` | yes | each redraw, and when used |
+| `running`, `disabled`, `closable`, `error`, `no-attachments`, `accept`, `allow-empty-text` | yes | each redraw, and when used |
 | `max-file-size`, `max-total-size`, `max-files` | no | `addFiles()`, through `limits` |
 | `sticky-attachments` | no | `submit()` |
 | `mention-trigger` | no | each keystroke (`input`) |
@@ -206,10 +210,11 @@ negative or not a number falls back to its default.
 
 - **C1.** Enter (without Shift, and not during IME composition) calls `submit()`.
 - **C2.** `submit(text?)` does the following:
-  1. It returns `false` if the trimmed text is empty, or the panel is `running` or
+  1. It returns `false` if the trimmed text is empty (unless `text` was omitted,
+     `allow-empty-text` is set and files or references exist), or the panel is `running` or
      `disabled`.
   2. It fires a cancelable `agent-submit` with
-     `{ text: trimmed, attachments: copy, references: copy }`.
+     `{ text: trimmed, attachments: copy, references: copy, fromDraft: text === undefined }`.
   3. If the event wasn't cancelled, it:
      - clears the draft (only when `text` was left out);
      - clears the attachments, unless `sticky-attachments` is set;
@@ -219,7 +224,8 @@ negative or not a number falls back to its default.
   4. It returns `true` unless the event was cancelled.
 - **C3.** Clicking a suggestion calls `submit(suggestionText)`. The draft is kept.
 - **C4.** While `running`, the textarea stays enabled, Stop is shown and Send is hidden.
-  Send is disabled whenever the draft is blank or the panel is `disabled`.
+  Send is disabled when the panel is `disabled`, or the draft is blank unless
+  both `allow-empty-text` is set and at least one attachment or reference exists.
 - **C5.** The textarea grows to fit its content, up to `--agent-composer-max-height`.
 
 ### Attachments
@@ -334,7 +340,7 @@ negative or not a number falls back to its default.
 
 | Event | Detail | Cancelable | Fired by |
 |---|---|---|---|
-| `agent-submit` | `{ text, attachments }` | yes | `submit()` |
+| `agent-submit` | `{ text, attachments, references, fromDraft }` | yes | `submit()` |
 | `agent-stop` | `null` | no | Stop button |
 | `agent-close` | `null` | no | Close button (the panel doesn't hide itself) |
 | `agent-action` | `{ action, ...detail }` | yes | `emitAction()` |
@@ -458,3 +464,11 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
   3. Apps pick up the release with `npm install github:compdani/agent-panel#v<version>`.
 - **Docs.** Keep `README.md` (for people) and this file (the contract) in step with the
   code in the same commit.
+
+## 0.2.1 additions
+
+- `clearComposer({ draft = true, attachments = true, references = true } = {})` performs selective accepted-submit cleanup, closes mentions and forces scroll following. Submit delegates to it, respecting sticky attachments and explicit text. Reference clearing emits only when references existed.
+- `setAttachmentState(id, { busy?, error? } | null)` replaces chip state. Busy shows a spinner and disables the remove button; error gives an error tone and tooltip. Null or an empty object clears state; unknown IDs do nothing. Attachments expose optional `state`; removal and clearing discard it.
+- For upload-first hosts, cancel `agent-submit`, call `clearComposer({ draft: event.detail.fromDraft, attachments: false })` immediately, mark uploads with `setAttachmentState`, then remove the sent attachments after success. Do not clear the draft after uploading: the user may have typed more.
+- Declarations ship for all entry points, with typed event maps and tag maps only in the defining entry points. `npm run check-types` checks NodeNext and bundler resolution without runtime dependencies.
+- Git-free installs: `npm install https://codeload.github.com/compdani/agent-panel/tar.gz/refs/tags/vX.Y.Z`. This avoids git/SSH lockfile requirements in Docker builds.

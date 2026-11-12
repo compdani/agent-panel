@@ -56,8 +56,16 @@ The package is plain ES modules with no dependencies and no build step. Install 
 GitHub, pinned to a release tag:
 
 ```sh
-npm install github:compdani/agent-panel#v0.1.0
+npm install github:compdani/agent-panel#vX.Y.Z
 ```
+
+For builds without git or SSH (for example Docker images), use the HTTPS tarball:
+
+```sh
+npm install https://codeload.github.com/compdani/agent-panel/tar.gz/refs/tags/vX.Y.Z
+```
+
+The `github:` shorthand can record a `git+ssh` URL in the lockfile. The tarball avoids that requirement. TypeScript declarations and typed custom events ship with every entry point.
 
 Then import it in your app:
 
@@ -153,6 +161,7 @@ same name.
 | `max-total-size` | bytes | `20971520` (20 MiB) | Largest combined size of all attachments. |
 | `max-files` | number | `12` | Most files attached at once. |
 | `no-attachments` | boolean | off | Hides the paperclip and ignores pasted and dropped files. |
+| `allow-empty-text` | boolean | off | Allows a blank draft to send when attachments or references are present. Explicit `submit('')` still fails. |
 | `sticky-attachments` | boolean | off | Keeps attachments after sending, so every message carries them until they're removed. |
 | `mention-trigger` | string | none | A character, usually `@`, that opens a mention while typing. See [References and mentions](#references-and-mentions). |
 | `theme` | `"dark"` | none | Built-in dark colours, for pages that don't set their own [colour tokens](#styling). |
@@ -208,9 +217,11 @@ yet.
 
 | Method | Returns | Description |
 |---|---|---|
-| `submit(text?)` | `boolean` | Sends `text`, or the draft if you leave it out, together with the current attachments and references, by firing `agent-submit`. Returns `false` if nothing was sent: the text was empty, or the panel is `running` or `disabled`. Also returns `false` if a listener cancelled the event. Otherwise it clears the draft (only when the draft was what it sent), the references, and the attachments (unless `sticky-attachments` is set). |
+| `submit(text?)` | `boolean` | Sends `text`, or the draft if you leave it out, together with the current attachments and references, by firing `agent-submit`. Returns `false` if nothing was sent: the text was empty (unless sending a draft with `allow-empty-text` and files or references), or the panel is `running` or `disabled`. Also returns `false` if a listener cancelled the event. Otherwise it clears the draft (only when the draft was what it sent), the references, and the attachments (unless `sticky-attachments` is set). |
 | `addFiles(files, { pasted? })` | `{ added, problems }` | Adds files the way the picker, paste and drop do, checking them against the limits. `added` lists the new attachments and `problems` lists the reasons any were refused. With `pasted: true`, unnamed images get names like `pasted-image-20261112-095412.png`. |
 | `removeAttachment(id)` | | Removes one attachment. |
+| `clearComposer({ draft = true, attachments = true, references = true } = {})` | | Selectively clears the composer, closes mentions and forces scroll following. |
+| `setAttachmentState(id, state)` | | Replaces chip state with `{ busy?, error? }`; `null` clears it. Busy chips show a spinner and disable removal; errors show an error tone and tooltip. Unknown IDs are ignored. The attachment exposes optional `state`. |
 | `clearAttachments()` | | Removes all attachments. |
 | `addReference(ref)` | `boolean` | Adds a reference chip. If a mention is open, the typed trigger and query (e.g. `@spr`) are removed from the draft and the mention closes. Returns `false` if that reference was already there. |
 | `removeReference(refOrKey)` | | Removes a reference, given the reference or its key (`"type:id"`). |
@@ -235,7 +246,7 @@ All events bubble and cross the shadow boundary (`composed`).
 
 | Event | `detail` | Cancelable | When |
 |---|---|---|---|
-| `agent-submit` | `{ text, attachments, references }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
+| `agent-submit` | `{ text, attachments, references, fromDraft }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
 | `agent-stop` | — | no | The Stop button is pressed. |
 | `agent-close` | — | no | The close button is pressed. The panel doesn't hide itself. |
 | `agent-action` | `{ action, ...}` | yes | A button in a custom entry called `emitAction()`. |
@@ -737,7 +748,7 @@ To release:
 3. In each app, update the dependency to the new tag:
 
    ```sh
-   npm install github:compdani/agent-panel#v0.2.0
+   npm install github:compdani/agent-panel#vX.Y.Z
    ```
 
 While the version is `0.x`, a change that breaks the API raises the minor version
@@ -745,3 +756,49 @@ While the version is `0.x`, a change that breaks the API raises the minor versio
 
 The icons in `icons.js` are from [Material Design Icons](https://pictogrammers.com/library/mdi/)
 (Apache-2.0).
+
+### Upload before sending
+
+`agent-submit.detail.fromDraft` is false for explicit `submit(text)` and suggestion clicks.
+Cancel submission and clear the sent draft immediately so text typed during upload survives:
+
+```js
+panel.addEventListener('agent-submit', async (event) => {
+  event.preventDefault();
+  const { text, attachments, references, fromDraft } = event.detail;
+  panel.clearComposer({ draft: fromDraft, attachments: false });
+  panel.running = true;
+  try {
+    const files = await Promise.all(attachments.map(async (a) => {
+      panel.setAttachmentState(a.id, { busy: true });
+      try { return await upload(a.file); }
+      catch (error) {
+        panel.setAttachmentState(a.id, { error: String(error) });
+        throw error;
+      }
+    }));
+    await send({ text, files, references });
+    attachments.forEach((a) => panel.removeAttachment(a.id));
+  } finally {
+    panel.running = false;
+  }
+});
+```
+
+`upload` and `send` above are host functions. Handle failures in the host; cancelled submissions retain files for retry. State is discarded on removal or clearing.
+
+For standalone browser regression checks (Chromium), install Playwright outside the
+package, then run:
+
+```sh
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node test/browser.check.mjs
+```
+
+Run `npm run check-types` for NodeNext and bundler declaration checks. Browser regression
+checks cover both tags, entry-point isolation, submission, chip states, paste and drop.
+These supplement the consuming app's integration checks.
+
+To check a consuming Event Pocket checkout's actual custom-element subclasses through
+Vue, set `EVENT_POCKET_ROOT` to its `events_admin` directory when running the same
+browser script. It loads the app's renderer, Marked and Vue with the local panel source,
+without changing the app's installed package or contacting its backend.
