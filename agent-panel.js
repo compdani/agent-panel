@@ -2,7 +2,7 @@
 //
 // The host owns the conversation and the network; the panel owns the composer. Set
 // `entries` to show the transcript, listen for `agent-submit` to send. See README.md
-// for the full API and how to extend it.
+// for the full API and how to extend it. This module defines no tag: index.js does.
 import {
   DEFAULT_LIMITS, attachmentProblem, formatBytes, nameFor, pastedFiles, filesFromDataTransfer, readAsBase64,
 } from './attachments.mjs';
@@ -43,7 +43,8 @@ export function h(tag, props, ...children) {
   return el;
 }
 
-export function icon(name, size = 18, className = '') {
+// An icon by name (see icons.js), or any 24×24 SVG path string, e.g. one from @mdi/js.
+export function icon(nameOrPath, size = 18, className = '') {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('width', size);
@@ -51,7 +52,7 @@ export function icon(name, size = 18, className = '') {
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('class', `icon ${className}`.trim());
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', ICONS[name] || '');
+  path.setAttribute('d', ICONS[nameOrPath] || (/^[Mm]/.test(String(nameOrPath || '')) ? nameOrPath : ''));
   svg.append(path);
   return svg;
 }
@@ -81,6 +82,26 @@ function uniqueName(name, taken) {
   return `${stem}-${n}${ext}`;
 }
 
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// References point at things in the host app (a contact, a document…) by type and id.
+export function referenceKey(ref) {
+  return `${ref?.type}:${ref?.id}`;
+}
+
+function normalizeReferences(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).filter((ref) => {
+    if (!ref || ref.type == null || ref.id == null || seen.has(referenceKey(ref))) return false;
+    seen.add(referenceKey(ref));
+    return true;
+  });
+}
+
+const MENTION_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape']);
+
 let nextId = 0;
 
 export class AgentPanelElement extends Base {
@@ -88,6 +109,9 @@ export class AgentPanelElement extends Base {
 
   // Subclasses add their own CSS with `static styles = '...'`; it's appended after this.
   static styles = STYLES;
+
+  // Subclasses add their own words with `static defaultLabels = { ...super.defaultLabels, … }`.
+  static defaultLabels = DEFAULT_LABELS;
 
   static get observedAttributes() {
     return ['heading', 'placeholder', 'hint', 'empty-title', 'empty-text', 'running', 'disabled', 'closable',
@@ -106,7 +130,9 @@ export class AgentPanelElement extends Base {
     this._entries = [];
     this._suggestions = [];
     this._attachments = [];
-    this._labels = { ...DEFAULT_LABELS };
+    this._references = [];
+    this._mention = null;
+    this._labels = { ...this.constructor.defaultLabels };
     this._renderers = new Map();
     this._nodes = new Map();
     this._markdown = null;
@@ -121,7 +147,7 @@ export class AgentPanelElement extends Base {
 
   // ---- Properties -------------------------------------------------------------------
 
-  // Transcript rows: { id, type: 'text', role: 'user' | 'assistant', content },
+  // Transcript rows: { id, type: 'text', role: 'user' | 'assistant', content, references? },
   // { id, type: 'tools', label?, tools: [{ id, name, label?, status, detail? }] }, or any
   // type a renderer handles. Rows nothing renders become <slot name="entry-{id}">.
   get entries() { return this._entries; }
@@ -151,7 +177,7 @@ export class AgentPanelElement extends Base {
   get labels() { return this._labels; }
 
   set labels(value) {
-    this._labels = { ...DEFAULT_LABELS, ...(value || {}) };
+    this._labels = { ...this.constructor.defaultLabels, ...(value || {}) };
     this._rerenderEntries();
   }
 
@@ -165,6 +191,20 @@ export class AgentPanelElement extends Base {
 
   // What's waiting in the composer: [{ id, file, name, type, size, previewUrl, base64() }].
   get attachments() { return this._attachments.slice(); }
+
+  // Things from the host app the next message refers to: [{ type, id, label?, ...any }].
+  // Shown as chips beside the attachments, sent with `agent-submit`, then cleared.
+  get references() { return this._references.slice(); }
+
+  set references(value) {
+    this._references = normalizeReferences(value);
+    this._schedule();
+  }
+
+  // { open, query } while the person is typing a mention (see `mention-trigger`).
+  get mention() {
+    return { open: Boolean(this._mention), query: this._mention?.query ?? '' };
+  }
 
   get limits() {
     const num = (attr, fallback) => {
@@ -215,7 +255,7 @@ export class AgentPanelElement extends Base {
       const taken = new Set(this._attachments.map((a) => a.name));
       const name = uniqueName(nameFor(raw, { pasted, index }), taken);
       const file = name === raw.name ? raw : new File([raw], name, { type: raw.type, lastModified: raw.lastModified });
-      const problem = attachmentProblem(file, this._attachments, this.limits);
+      const problem = this.fileProblem(file, this._attachments);
       if (problem) {
         problems.push(problem);
         return;
@@ -263,16 +303,59 @@ export class AgentPanelElement extends Base {
     this._schedule();
   }
 
-  // Sends `text` (the draft by default) with the attachments, through a cancelable
-  // `agent-submit` event. Unless a listener cancels it, the composer then clears.
+  // Adds a reference chip. While a mention is open, the typed "@query" is replaced by it.
+  addReference(ref) {
+    if (!ref || ref.type == null || ref.id == null) return false;
+    if (this._mention && this._mention.from >= 0) {
+      const { from, query } = this._mention;
+      const end = from + this._trigger().length + query.length;
+      const text = this.draft;
+      this.draft = text.slice(0, from) + text.slice(end);
+      this.$input.setSelectionRange(from, from);
+    }
+    this.closeMention();
+    const isNew = !this._references.some((r) => referenceKey(r) === referenceKey(ref));
+    if (isNew) {
+      this._references = [...this._references, ref];
+      this._referencesChanged();
+    }
+    this.focus();
+    return isNew;
+  }
+
+  removeReference(refOrKey) {
+    const key = typeof refOrKey === 'string' ? refOrKey : referenceKey(refOrKey);
+    const next = this._references.filter((r) => referenceKey(r) !== key);
+    if (next.length === this._references.length) return;
+    this._references = next;
+    this._referencesChanged();
+  }
+
+  // Opens the mention picker without typing the trigger, e.g. from a toolbar button.
+  openMention() {
+    this._setMention({ query: '', from: -1 });
+    this.focus();
+  }
+
+  closeMention() {
+    this._setMention(null);
+  }
+
+  // Sends `text` (the draft by default) with the attachments and references, through a
+  // cancelable `agent-submit` event. Unless a listener cancels it, the composer then clears.
   submit(text) {
     const fromDraft = text === undefined;
     const message = String(fromDraft ? this.draft : text).trim();
     if (!message || this.running || this.disabled) return false;
-    const accepted = this._emit('agent-submit', { text: message, attachments: this.attachments }, { cancelable: true });
+    const accepted = this._emit('agent-submit', { text: message, attachments: this.attachments, references: this.references }, { cancelable: true });
     if (accepted) {
       if (fromDraft) this.draft = '';
       if (!this.hasAttribute('sticky-attachments')) this.clearAttachments();
+      if (this._references.length) {
+        this._references = [];
+        this._referencesChanged();
+      }
+      this.closeMention();
       this.scrollToBottom({ force: true });
     }
     return accepted;
@@ -303,7 +386,12 @@ export class AgentPanelElement extends Base {
 
   renderText(entry) {
     if (!entry.content) return h('div', { hidden: true });
-    if (entry.role === 'user') return h('div', { class: 'bubble', part: 'bubble', 'data-role': 'user' }, entry.content);
+    if (entry.role === 'user') {
+      const bubble = h('div', { class: 'bubble', part: 'bubble', 'data-role': 'user' }, entry.content);
+      const refs = normalizeReferences(entry.references);
+      if (!refs.length) return bubble;
+      return h('div', { class: 'user-turn' }, h('div', { class: 'chips chips--end' }, refs.map((ref) => this.renderReference(ref))), bubble);
+    }
     return h('div', { class: 'message', part: 'message', 'data-role': entry.role || 'assistant', html: this.renderMarkdown(entry.content) });
   }
 
@@ -337,17 +425,44 @@ export class AgentPanelElement extends Base {
     );
   }
 
+  // A reference chip. Clicking it fires `agent-reference-open`; `removable` adds an ×.
+  renderReference(ref, { removable = false } = {}) {
+    const label = ref.label || String(ref.id);
+    return h(
+      'span',
+      { class: 'chip chip--ref', part: 'reference', 'data-reference': referenceKey(ref), title: label },
+      h(
+        'button',
+        { type: 'button', class: 'chip-open', onClick: () => this._emit('agent-reference-open', { reference: ref }) },
+        this.referenceIcon(ref),
+        h('span', { class: 'chip-label' }, label),
+      ),
+      removable ? h('button', {
+        type: 'button', class: 'chip-x', 'aria-label': `${this._labels.remove} ${label}`, onClick: () => this.removeReference(ref),
+      }, icon('close', 12)) : null,
+    );
+  }
+
+  // The icon at the start of a reference chip.
+  referenceIcon(ref) {
+    return icon(ref.type === 'file' ? 'file' : 'link', 13);
+  }
+
+  // Why `file` can't join `current`, or ''. Override to add rules; call super for the limits.
+  fileProblem(file, current) {
+    return attachmentProblem(file, current, this.limits);
+  }
+
+  // Wraps the panel's content into the element's root. Subclasses can add around it.
+  layout(panel) {
+    return panel;
+  }
+
   // ---- Lifecycle --------------------------------------------------------------------
 
   connectedCallback() {
     // Properties set before the element was defined shadow the accessors; replay them.
-    ['entries', 'suggestions', 'markdown', 'labels', 'draft', 'error', 'running', 'disabled', 'closable'].forEach((name) => {
-      if (Object.prototype.hasOwnProperty.call(this, name)) {
-        const value = this[name];
-        delete this[name];
-        this[name] = value;
-      }
-    });
+    this._upgradeProperties(['entries', 'suggestions', 'markdown', 'labels', 'draft', 'references', 'error', 'running', 'disabled', 'closable']);
     if (!this._resize && typeof ResizeObserver !== 'undefined') {
       this._resize = new ResizeObserver(() => this.scrollToBottom());
       this._resize.observe(this.$inner);
@@ -366,6 +481,16 @@ export class AgentPanelElement extends Base {
 
   // ---- Internals --------------------------------------------------------------------
 
+  _upgradeProperties(names) {
+    names.forEach((name) => {
+      if (Object.prototype.hasOwnProperty.call(this, name)) {
+        const value = this[name];
+        delete this[name];
+        this[name] = value;
+      }
+    });
+  }
+
   _emit(type, detail, { cancelable = false } = {}) {
     return this.dispatchEvent(new CustomEvent(type, {
       detail, bubbles: true, composed: true, cancelable,
@@ -379,6 +504,35 @@ export class AgentPanelElement extends Base {
 
   _attachmentsChanged() {
     this._emit('agent-attachments-change', { attachments: this.attachments });
+  }
+
+  _referencesChanged() {
+    this._emit('agent-references-change', { references: this.references });
+    this._schedule();
+  }
+
+  _trigger() {
+    return this.getAttribute('mention-trigger') || '';
+  }
+
+  _setMention(next) {
+    const was = this._mention;
+    this._mention = next;
+    if (!was && !next) return;
+    if (was && next && was.query === next.query && was.from === next.from) return;
+    this._emit('agent-mention', this.mention);
+    this._schedule();
+  }
+
+  // Opens, updates or closes the mention as the person types after the trigger.
+  _trackMention() {
+    const trigger = this._trigger();
+    if (!trigger) return;
+    const caret = this.$input.selectionStart ?? this.draft.length;
+    const t = escapeRegExp(trigger);
+    const match = this.draft.slice(0, caret).match(new RegExp(`(^|\\s)${t}([^\\s${t}]*)$`));
+    if (match) this._setMention({ query: match[2], from: caret - match[2].length - trigger.length });
+    else if (this._mention && this._mention.from >= 0) this._setMention(null);
   }
 
   _rerenderEntries() {
@@ -402,17 +556,33 @@ export class AgentPanelElement extends Base {
     el.style.height = `${el.scrollHeight}px`;
   }
 
+  _onKeydown(e) {
+    if (this._mention && MENTION_KEYS.has(e.key)) {
+      // The host's picker gets the key first; cancelling the event means it used it.
+      const used = !this._emit('agent-mention-key', { key: e.key, event: e }, { cancelable: true });
+      if (used) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeMention();
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      this.submit();
+    }
+  }
+
   _build() {
     const slot = (name, ...fallback) => h('slot', { name }, ...fallback);
     this.$heading = h('span', { class: 'heading', part: 'heading' });
     this.$close = h('button', { type: 'button', class: 'btn btn--icon', part: 'close', onClick: () => this._emit('agent-close') }, icon('close'));
     this.$subhead = h('div', { class: 'subhead', part: 'subheader', hidden: true }, slot('subheader'));
-    const header = h(
-      'header',
-      { class: 'header', part: 'header' },
-      h('div', { class: 'head' }, slot('header-start', this.$heading), h('div', { class: 'spacer' }), slot('header-actions'), this.$close),
-      this.$subhead,
-    );
+    this.$head = h('div', { class: 'head' }, slot('header-start', this.$heading), h('div', { class: 'spacer' }), slot('header-actions'), this.$close);
+    this.$header = h('header', { class: 'header', part: 'header' }, this.$head, this.$subhead);
 
     this.$emptyTitle = h('h2', { class: 'empty-title' });
     this.$emptyText = h('p', { class: 'empty-text' });
@@ -438,23 +608,20 @@ export class AgentPanelElement extends Base {
     }, { passive: true });
 
     this.$attachError = h('div', { class: 'attach-error', role: 'alert', hidden: true });
+    this.$refChips = h('span', { class: 'chips-files' });
     this.$fileChips = h('span', { class: 'chips-files' });
     this.$chipSlot = slot('composer-chips');
-    this.$chips = h('div', { class: 'chips', part: 'attachments', hidden: true }, this.$fileChips, this.$chipSlot);
+    this.$chips = h('div', { class: 'chips', part: 'attachments', hidden: true }, this.$refChips, this.$fileChips, this.$chipSlot);
     this.$input = h('textarea', {
       class: 'input',
       part: 'input',
       rows: 1,
       onInput: () => {
         this._grow();
+        this._trackMention();
         this._renderControls();
       },
-      onKeydown: (e) => {
-        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-          e.preventDefault();
-          this.submit();
-        }
-      },
+      onKeydown: (e) => this._onKeydown(e),
     });
     this.$fileInput = h('input', {
       type: 'file',
@@ -469,6 +636,7 @@ export class AgentPanelElement extends Base {
     this.$hint = h('span', { class: 'hint', part: 'hint' });
     this.$stop = h('button', { type: 'button', class: 'btn btn--icon btn--tonal', part: 'stop', onClick: () => this._emit('agent-stop') }, icon('stop'));
     this.$send = h('button', { type: 'submit', class: 'btn btn--icon btn--primary', part: 'send' }, icon('send'));
+    this.$mention = h('div', { class: 'mention', part: 'mention', hidden: true }, slot('mention'));
     this.$form = h(
       'form',
       {
@@ -481,14 +649,16 @@ export class AgentPanelElement extends Base {
       },
       this.$attachError,
       this.$chips,
-      h('div', { class: 'box' }, this.$input, h('div', { class: 'row' }, this.$attach, slot('composer-actions'), this.$hint, h('div', { class: 'spacer' }), this.$stop, this.$send)),
+      h('div', { class: 'box' }, this.$mention, this.$input, h('div', { class: 'row' }, this.$attach, slot('composer-actions'), this.$hint, h('div', { class: 'spacer' }), this.$stop, this.$send)),
       this.$fileInput,
     );
 
     this.$dropLabel = h('span');
     this.$drop = h('div', { class: 'drop', part: 'drop', hidden: true }, icon('upload', 28), this.$dropLabel);
-    const panel = h('div', { class: 'panel', part: 'panel' }, header, this.$scroll, this.$form, this.$drop);
-    this._listenForFiles(panel);
+    this.$panel = h('div', { class: 'panel', part: 'panel' }, this.$header, this.$scroll, this.$form);
+    const root = this.layout(this.$panel);
+    root.append(this.$drop);
+    this._listenForFiles(root);
 
     // Slots that sit in their own row hide the row while nothing fills them.
     this.shadowRoot.addEventListener('slotchange', () => this._renderControls());
@@ -499,39 +669,39 @@ export class AgentPanelElement extends Base {
       if (Object.prototype.hasOwnProperty.call(c, 'styles')) sheets.unshift(c.styles);
     }
     style.textContent = sheets.join('\n');
-    this.shadowRoot.append(style, panel);
+    this.shadowRoot.append(style, root);
   }
 
   _canAttach() {
     return !this.hasAttribute('no-attachments') && !this.disabled;
   }
 
-  _listenForFiles(panel) {
+  _listenForFiles(root) {
     const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
-    panel.addEventListener('paste', (e) => {
+    root.addEventListener('paste', (e) => {
       if (!this._canAttach()) return;
       const files = pastedFiles(e.clipboardData);
       if (!files.length) return;
       e.preventDefault();
       this.addFiles(files, { pasted: true });
     });
-    panel.addEventListener('dragenter', (e) => {
+    root.addEventListener('dragenter', (e) => {
       if (!hasFiles(e) || !this._canAttach()) return;
       e.preventDefault();
       this._dragDepth += 1;
       this.$drop.hidden = false;
     });
-    panel.addEventListener('dragover', (e) => {
+    root.addEventListener('dragover', (e) => {
       if (!hasFiles(e) || !this._canAttach()) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     });
-    panel.addEventListener('dragleave', (e) => {
+    root.addEventListener('dragleave', (e) => {
       if (!hasFiles(e)) return;
       this._dragDepth = Math.max(0, this._dragDepth - 1);
       if (!this._dragDepth) this.$drop.hidden = true;
     });
-    panel.addEventListener('drop', (e) => {
+    root.addEventListener('drop', (e) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       this._dragDepth = 0;
@@ -577,6 +747,8 @@ export class AgentPanelElement extends Base {
     this.$error.hidden = !this.error;
     this.$attachError.textContent = this._attachError;
     this.$attachError.hidden = !this._attachError;
+    this.$mention.hidden = !this._mention;
+    this.$refChips.replaceChildren(...this._references.map((ref) => this.renderReference(ref, { removable: true })));
     this._renderChips();
     if (this._entriesDirty) {
       this._entriesDirty = false;
@@ -589,7 +761,7 @@ export class AgentPanelElement extends Base {
   _renderControls() {
     const assigned = (s) => s.assignedNodes({ flatten: true }).some((n) => n.nodeType === 1 || n.textContent.trim());
     this.$subhead.hidden = !assigned(this.$subhead.querySelector('slot'));
-    this.$chips.hidden = !this._attachments.length && !assigned(this.$chipSlot);
+    this.$chips.hidden = !this._attachments.length && !this._references.length && !assigned(this.$chipSlot);
     this.$attach.hidden = this.hasAttribute('no-attachments');
     this.$attach.disabled = this.disabled;
     this.$stop.hidden = !this.running;

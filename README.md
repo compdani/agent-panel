@@ -1,10 +1,19 @@
 # Agent Panel API
 
-`<agent-panel>` is a chat panel for an AI agent. It is a standard Web Component (a custom
-element with Shadow DOM) and has no dependencies, so it works in Vue, React, Svelte,
-Angular or plain HTML.
+This package contains two chat components for AI agents. Both are standard Web
+Components (custom elements with Shadow DOM) with no dependencies, so they work in Vue,
+React, Svelte, Angular or plain HTML.
 
-The panel draws the chat and runs the composer. It does not talk to any server. Your code
+| Element | Import | For |
+|---|---|---|
+| `<agent-panel>` | `agent-panel` | A compact chat, e.g. in a side panel |
+| `<agent-page>` | `agent-panel/page` | A full-page chat with a conversation list, a renamable title and an "in context" bar. See [The agent page](#the-agent-page) |
+
+Each import defines only its own element, so you can use either one without the other.
+`<agent-page>` builds on the panel: everything in this guide about the panel applies to
+the page too, unless a section says otherwise.
+
+The components draw the chat and run the composer. It does not talk to any server. Your code
 owns the conversation: you tell the panel what to show, and it tells you when the person
 sends something.
 
@@ -29,13 +38,15 @@ sends something.
 7. [Events](#events)
 8. [Transcript entries](#transcript-entries)
 9. [Attachments](#attachments)
-10. [Slots](#slots)
-11. [Styling](#styling)
-12. [Extending the panel](#extending-the-panel)
-13. [Using it from a framework](#using-it-from-a-framework)
-14. [Accessibility](#accessibility)
-15. [Browser support and limits](#browser-support-and-limits)
-16. [Development and releases](#development-and-releases)
+10. [References and mentions](#references-and-mentions)
+11. [Slots](#slots)
+12. [Styling](#styling)
+13. [Extending the panel](#extending-the-panel)
+14. [The agent page](#the-agent-page)
+15. [Using it from a framework](#using-it-from-a-framework)
+16. [Accessibility](#accessibility)
+17. [Browser support and limits](#browser-support-and-limits)
+18. [Development and releases](#development-and-releases)
 
 ---
 
@@ -51,13 +62,15 @@ npm install github:compdani/agent-panel#v0.1.0
 Then import it in your app:
 
 ```js
-import 'agent-panel';                                          // defines <agent-panel>
-import { AgentPanelElement, h, icon } from 'agent-panel/element';  // to subclass (defines nothing)
+import 'agent-panel';                                               // defines <agent-panel>
+import 'agent-panel/page';                                          // defines <agent-page>
+import { AgentPanelElement, h, icon } from 'agent-panel/element';   // to subclass the panel (defines nothing)
+import { AgentPageElement } from 'agent-panel/page-element';        // to subclass the page (defines nothing)
 import { pastedFiles, readAsBase64 } from 'agent-panel/attachments'; // helpers on their own
 ```
 
-Without npm, clone the repo (or add it as a git submodule) and import
-`agent-panel/index.js` by path.
+Without npm, clone the repo (or add it as a git submodule) and import `index.js` (the
+panel) or `page.js` (the page) by path.
 
 ---
 
@@ -141,6 +154,7 @@ same name.
 | `max-files` | number | `12` | Most files attached at once. |
 | `no-attachments` | boolean | off | Hides the paperclip and ignores pasted and dropped files. |
 | `sticky-attachments` | boolean | off | Keeps attachments after sending, so every message carries them until they're removed. |
+| `mention-trigger` | string | none | A character, usually `@`, that opens a mention while typing. See [References and mentions](#references-and-mentions). |
 | `theme` | `"dark"` | none | Built-in dark colours, for pages that don't set their own [colour tokens](#styling). |
 
 The limit attributes and `sticky-attachments` are read when they're needed, so changing
@@ -156,6 +170,8 @@ them takes effect from the next file added or message sent.
 | `suggestions` | `string[]` | Suggestion buttons in the empty state. Clicking one sends it. |
 | `draft` | `string` | Text in the composer. Get it or set it. |
 | `attachments` | `Attachment[]` | *Read only.* A copy of the files waiting in the composer. |
+| `references` | `Reference[]` | Things from your app attached to the next message, shown as chips. See [References and mentions](#references-and-mentions). |
+| `mention` | `{ open, query }` | *Read only.* Whether a mention is open, and what has been typed after the trigger. |
 | `markdown` | `(text) => string \| null` | Turns reply text into HTML. Without it, replies show as plain paragraphs. **Return safe HTML**: the panel inserts it as is. |
 | `labels` | `object` | Replaces the panel's own words, for translation. See below. |
 | `limits` | `object` | *Read only.* `{ accept, maxFileSize, maxTotalSize, maxFiles }` as currently in effect. |
@@ -163,7 +179,8 @@ them takes effect from the next file added or message sent.
 
 ### `labels`
 
-Pass only the keys you want to change. The rest keep their defaults.
+Pass only the keys you want to change. The rest keep their defaults. `<agent-page>` has
+[more keys](#page-labels).
 
 ```js
 panel.labels = { send: 'Enviar', usedTools: (n) => `Usó ${n} herramientas` };
@@ -191,10 +208,14 @@ yet.
 
 | Method | Returns | Description |
 |---|---|---|
-| `submit(text?)` | `boolean` | Sends `text`, or the draft if you leave it out, together with the current attachments, by firing `agent-submit`. Returns `false` if nothing was sent: the text was empty, or the panel is `running` or `disabled`. Also returns `false` if a listener cancelled the event. Otherwise it clears the draft (only when the draft was what it sent) and the attachments (unless `sticky-attachments` is set). |
+| `submit(text?)` | `boolean` | Sends `text`, or the draft if you leave it out, together with the current attachments and references, by firing `agent-submit`. Returns `false` if nothing was sent: the text was empty, or the panel is `running` or `disabled`. Also returns `false` if a listener cancelled the event. Otherwise it clears the draft (only when the draft was what it sent), the references, and the attachments (unless `sticky-attachments` is set). |
 | `addFiles(files, { pasted? })` | `{ added, problems }` | Adds files the way the picker, paste and drop do, checking them against the limits. `added` lists the new attachments and `problems` lists the reasons any were refused. With `pasted: true`, unnamed images get names like `pasted-image-20261112-095412.png`. |
 | `removeAttachment(id)` | | Removes one attachment. |
 | `clearAttachments()` | | Removes all attachments. |
+| `addReference(ref)` | `boolean` | Adds a reference chip. If a mention is open, the typed trigger and query (e.g. `@spr`) are removed from the draft and the mention closes. Returns `false` if that reference was already there. |
+| `removeReference(refOrKey)` | | Removes a reference, given the reference or its key (`"type:id"`). |
+| `openMention()` | | Opens a mention without typing the trigger, e.g. from a toolbar button. |
+| `closeMention()` | | Closes the mention. |
 | `focus(options?)` | | Puts the cursor in the composer. |
 | `scrollToBottom({ force? })` | | Scrolls to the latest message if the panel is following. With `force: true`, it scrolls anyway and starts following again. |
 | `defineEntry(type, render)` | the panel | Draws entries of `type` with `render(entry, panel)`, which returns a DOM node. Pass `null` to remove a renderer. |
@@ -204,6 +225,7 @@ yet.
 |---|---|
 | `AgentPanelElement.define(tag?, registry?)` | Registers the class under `tag` (default: the class's `tagName`). Safe to call more than once. |
 | `AgentPanelElement.readAsBase64(file)` | `Promise<string>`: the file's contents as base64, without a `data:` prefix. |
+| `AgentPanelElement.defaultLabels` | The default `labels`. Subclasses extend it. |
 
 ---
 
@@ -213,13 +235,19 @@ All events bubble and cross the shadow boundary (`composed`).
 
 | Event | `detail` | Cancelable | When |
 |---|---|---|---|
-| `agent-submit` | `{ text, attachments }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
+| `agent-submit` | `{ text, attachments, references }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
 | `agent-stop` | — | no | The Stop button is pressed. |
 | `agent-close` | — | no | The close button is pressed. The panel doesn't hide itself. |
 | `agent-action` | `{ action, ...}` | yes | A button in a custom entry called `emitAction()`. |
 | `agent-attachments-change` | `{ attachments }` | no | Files are added or removed. |
 | `agent-attachment-error` | `{ problems: string[] }` | no | One or more files were refused. |
 | `agent-error-dismiss` | — | no | The error banner was dismissed. The panel has already cleared `error`. Clear your own copy too. |
+| `agent-references-change` | `{ references }` | no | References are added or removed. |
+| `agent-reference-open` | `{ reference }` | no | A reference chip was clicked, in the composer, on a message, or in the page's context bar. |
+| `agent-mention` | `{ open, query }` | no | A mention opened, its query changed, or it closed. |
+| `agent-mention-key` | `{ key, event }` | yes | While a mention is open, the person pressed ↑, ↓, Enter, Tab or Escape. Cancel the event if your picker used the key. |
+
+The page fires [a few more events](#page-events).
 
 ---
 
@@ -237,7 +265,8 @@ streams in.
 { id: 'm2', type: 'text', role: 'assistant', content: '**Done.** Here is…' }
 ```
 
-`user` messages show as plain text in a bubble. Any other `role` is rendered with
+`user` messages show as plain text in a bubble. A user message can also carry
+`references: [{ type, id, label }]`, shown as chips above the bubble. Any other `role` is rendered with
 `markdown`. An entry with empty `content` isn't shown.
 
 ### Tool calls
@@ -298,6 +327,48 @@ Each attachment in `attachments` and in `agent-submit` looks like this:
 
 ---
 
+## References and mentions
+
+A **reference** points at something in your app (a contact, a document, a ticket) that
+the next message is about. It's a plain object:
+
+```js
+{ type: 'contact', id: '42', label: 'Ana Pérez' } // any other fields are kept
+```
+
+References appear as chips next to the attachments. They're sent in
+`agent-submit`'s `detail.references` and cleared after sending. Two references with the
+same `type` and `id` count as one. Clicking a chip fires `agent-reference-open`.
+
+A **mention** is how people add references by typing. Set `mention-trigger="@"`, and
+typing `@` at the start of a word opens one. The panel doesn't know what your app
+contains, so **you supply the picker**:
+
+1. Put your picker in the `mention` slot. It shows only while a mention is open, and it
+   can position itself against the composer box, e.g. `position: absolute;
+   bottom: 100%`.
+2. On `agent-mention`, search for `detail.query` (or hide the picker when `detail.open`
+   is false).
+3. On `agent-mention-key`, move the selection for ↑ and ↓, and pick for Enter or Tab.
+   Call `event.preventDefault()` for the keys you used. Otherwise Enter would send the
+   message, and Escape closes the mention.
+4. When something is picked, call `panel.addReference({ type, id, label })`. That
+   replaces the typed `@query` with a chip.
+
+```js
+panel.setAttribute('mention-trigger', '@');
+panel.addEventListener('agent-mention', (e) => {
+  picker.hidden = !e.detail.open;
+  if (e.detail.open) picker.search(e.detail.query);
+});
+panel.addEventListener('agent-mention-key', (e) => {
+  if (picker.handleKey(e.detail.key)) e.preventDefault();
+});
+picker.onPick = (item) => panel.addReference({ type: item.type, id: item.id, label: item.name });
+```
+
+---
+
 ## Slots
 
 Put elements inside `<agent-panel>` with a `slot` attribute to add your own controls.
@@ -312,6 +383,7 @@ Slotted content belongs to your page, so your page's styles and frameworks apply
 | `transcript-end` | After the last entry, e.g. Retry or Undo buttons. |
 | `composer-chips` | Next to the attachment chips, for your own kinds of reference. The row is hidden while empty. |
 | `composer-actions` | Next to the paperclip. |
+| `mention` | Your mention picker, shown while a mention is open. |
 | `entry-{id}` | In place of an entry the panel can't draw. |
 
 ```html
@@ -357,7 +429,8 @@ Style individual pieces with `::part()`:
 
 `panel`, `header`, `heading`, `close`, `subheader`, `transcript`, `entries`, `empty`,
 `suggestion`, `bubble`, `message`, `tools`, `error`, `composer`, `attachments`,
-`attachment`, `input`, `attach`, `hint`, `send`, `stop`, `drop`.
+`attachment`, `reference`, `mention`, `input`, `attach`, `hint`, `send`, `stop`, `drop`.
+The page adds [its own parts](#page-styling).
 
 ```css
 agent-panel::part(bubble) { background: #ede9fe; }
@@ -410,15 +483,26 @@ SupportPanel.define();
 | `renderText(entry)` | Bubble for `user`, rendered reply otherwise. |
 | `renderTools(entry)` | The collapsible tool group. |
 | `renderMarkdown(text)` | Uses the `markdown` property, or plain paragraphs. |
+| `renderReference(ref, { removable })` | A reference chip. |
+| `referenceIcon(ref)` | The chip's icon: a document for `type: 'file'`, a link otherwise. Return your own icons by type. |
+| `fileProblem(file, current)` | Why a file can't be attached, or `''`. The default checks the limits. Override it to add rules, and call `super.fileProblem()` to keep the limits. |
+| `layout(panel)` | Returns the element's root, given the panel. The page uses it to add the sidebar. It runs inside the constructor, before your class's own fields exist. |
+
+To add words to `labels`, extend the defaults:
+`static defaultLabels = { ...AgentPanelElement.defaultLabels, approve: 'Approve' }`.
 
 ### Building blocks for your own entries
 
 - **`h(tag, props, ...children)`** creates an element. Props become attributes, except
   `class` (a string or an array), `onEvent` (a listener) and `html` (sets `innerHTML`; use
   it only with markup you trust). `null` and `false` values and children are skipped.
-- **`icon(name, size, className)`** returns an SVG icon. The names are `paperclip`,
-  `send`, `stop`, `close`, `chevron`, `check`, `alert`, `file`, `image` and `upload`.
-- **CSS classes**: `btn`, `btn--primary`, `btn--tonal`, `btn--icon`, `card`, `badge`,
+- **`icon(nameOrPath, size, className)`** returns an SVG icon. Give it one of the
+  built-in names (`paperclip`, `send`, `stop`, `close`, `chevron`, `check`, `alert`,
+  `file`, `image`, `upload`, `at`, `link`, `history`, `plus`, `delete`) or any 24×24 SVG
+  path, such as one from `@mdi/js`.
+- **`referenceKey(ref)`** returns `"type:id"`, the key the components use to tell
+  references apart.
+- **CSS classes**: `btn`, `btn--primary`, `btn--tonal`, `btn--icon`, `chip`, `card`, `badge`,
   `alert`, and `tone-success`, `tone-error`, `tone-warning`, `tone-info`, `tone-muted`.
 
 To keep a `<details>` element open across redraws, give it a `data-key` that stays the
@@ -426,10 +510,130 @@ same.
 
 ---
 
+## The agent page
+
+`<agent-page>` is the panel laid out for a whole page:
+
+```
+┌──────────────┬────────────────────────────────────────────┐
+│ + New chat   │ Spring launch ✎                    [slot]  │  header: title, header-actions
+│ Spring launch│ In context: (Spring sale) (Customers)      │  context bar
+│ Inbox triage │                                            │
+│              │        transcript, max 860px wide          │
+│ conversations│                                            │
+│              │        composer                            │
+└──────────────┴────────────────────────────────────────────┘
+```
+
+Below 760px wide, the conversation list moves into a drawer, opened with a history button
+in the header.
+
+```js
+import 'agent-panel/page';
+
+const page = document.querySelector('agent-page');
+page.conversations = [
+  { id: 'c1', title: 'Spring launch', updated: '2026-11-10T09:00:00Z', href: '/agent/c1' },
+  { id: 'c2', title: 'Inbox triage', updated: '2026-11-12T08:15:00Z', href: '/agent/c2' },
+];
+page.active = 'c1';
+page.setAttribute('heading', 'Spring launch');
+page.renamable = true;
+page.contextReferences = [{ type: 'campaign', id: '7', label: 'Spring sale' }];
+
+page.addEventListener('agent-select-conversation', (e) => {
+  e.preventDefault();          // stay in the app instead of following the link
+  myRouter.go(`/agent/${e.detail.id}`);
+});
+page.addEventListener('agent-new-conversation', () => myRouter.go('/agent'));
+page.addEventListener('agent-delete-conversation', (e) => api.delete(e.detail.id));
+page.addEventListener('agent-rename', (e) => api.rename(page.active, e.detail.title));
+```
+
+As with the panel, the page holds no data of its own: you set `conversations`, `active`,
+`heading` and `entries`, and respond to its events. Everything else in this guide
+(attributes, properties, methods, events, slots, references, mentions) works the same on
+the page.
+
+### Page attributes and properties
+
+| Name | Type | Description |
+|---|---|---|
+| `heading` (attribute) | string | The open conversation's title. With no title, the `untitled` label shows. |
+| `renamable` | boolean | Clicking the title edits it. Enter or leaving the field saves; Escape cancels. Saving fires `agent-rename`. |
+| `active` | string | The id of the open conversation, highlighted in the list. *Reflected.* |
+| `no-sidebar` (attribute) | boolean | Hides the conversation list. |
+| `conversations` (property) | `[{ id, title, updated?, href? }]` | The list. With `href`, rows are real links, so they can be opened in a new tab. |
+| `contextReferences` (property) | `Reference[]` | References already part of the conversation, shown in the "in context" bar under the header. Hidden while empty. |
+| `formatDate` (property) | `(value) => string` | Formats `updated` in the list. By default, today's dates show the time and other dates show the day. |
+
+### Page methods
+
+| Method | Description |
+|---|---|
+| `openSidebar()` / `closeSidebar()` | Opens or closes the drawer on narrow screens. |
+| `startRename()` | Starts editing the title, if `renamable`. |
+
+### Page events
+
+| Event | `detail` | Cancelable | When |
+|---|---|---|---|
+| `agent-select-conversation` | `{ id, conversation }` | yes | A conversation in the list is clicked. Cancel it to handle navigation yourself; otherwise a row with `href` follows its link. Clicks that open a new tab (Ctrl, ⌘, middle click) aren't reported. |
+| `agent-new-conversation` | — | no | The New chat button is pressed. |
+| `agent-delete-conversation` | `{ id, conversation }` | no | A deletion was confirmed. Each row asks once before firing this. The page doesn't remove the row: update `conversations`. |
+| `agent-rename` | `{ title }` | yes | The title was edited. If the event isn't cancelled, the page shows the new title straight away. |
+
+### Page slots
+
+All the panel's slots, plus `sidebar-start` and `sidebar-end`, above and below the
+conversation list. Put things like a model picker in `header-actions`.
+
+### Page labels
+
+| Key | Default |
+|---|---|
+| `newChat` | `New chat` |
+| `untitled` | `New chat` |
+| `conversations` | `Conversations` (the sidebar's and history button's names) |
+| `noConversations` | `No conversations yet.` |
+| `delete` | `Delete` |
+| `deleteConversation` | ``(title) => `Delete ${title}` `` |
+| `cancel` | `Cancel` |
+| `rename` | `Rename` |
+| `titleLabel` | `Title` |
+| `inContext` | `In context:` |
+
+### Page styling
+
+- **Tokens:** `--agent-sidebar-width` (default `250px`) and `--agent-content-max-width`
+  (default `860px`), in addition to the panel's tokens.
+- **Parts:** `page`, `sidebar`, `new-chat`, `conversation-list`, `conversation`,
+  `history`, `title`, `title-input`, `context-bar`.
+- **Size:** the page fills its parent's height, so give it one: for example,
+  `agent-page { display: block; height: calc(100vh - 64px); }`.
+
+### Extending the page
+
+Subclass `AgentPageElement` from `agent-panel/page-element` exactly as you would the
+panel. The same hooks apply.
+
+```js
+import { AgentPageElement } from 'agent-panel/page-element';
+
+class MyAgentPage extends AgentPageElement {
+  static tagName = 'my-agent-page';
+  static defaultLabels = { ...AgentPageElement.defaultLabels, newChat: 'Start over' };
+  renderMarkdown(text) { return mySanitizedMarkdown(text); }
+}
+MyAgentPage.define();
+```
+
+---
+
 ## Using it from a framework
 
-Whatever the framework, **import the module that defines the element before the
-framework first draws it.** Otherwise data you pass may end up as text attributes instead
+Everything here applies to `<agent-page>` as well. Whatever the framework, **import the
+module that defines the element before the framework first draws it.** Otherwise data you pass may end up as text attributes instead
 of properties.
 
 ### Vue 3
@@ -454,7 +658,10 @@ import 'agent-panel';
 </template>
 ```
 
-Vue keeps `slot="…"` as a normal attribute, so slots work. When you build `entries` in a
+Vue keeps `slot="…"` as a normal attribute, so slots work. For properties with
+camel-case names, such as the page's `contextReferences` and `formatDate`, write the
+binding in camel case (`:contextReferences="refs"`). Vue only sets a property when the
+name matches it exactly; a hyphenated name would be set as an attribute instead. When you build `entries` in a
 `computed`, read every field the panel shows. Copying the objects into plain ones does
 this. Otherwise a change made in place, such as a tool's status, won't update the panel.
 

@@ -127,9 +127,17 @@ button { font: inherit; }
 .chip--image { padding-left: 3px; }
 .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thumb { border-radius: 999px; flex: none; height: 22px; object-fit: cover; width: 22px; }
+.chip--ref { padding-left: 8px; }
+.chip-open { align-items: center; background: none; border: 0; color: inherit; cursor: pointer; display: inline-flex; gap: 4px; min-width: 0; padding: 0; }
+.chip-open:focus-visible { outline: 2px solid var(--agent-primary); outline-offset: 1px; }
+.chips--end { justify-content: flex-end; margin-bottom: 0; }
+.user-turn { align-items: flex-end; align-self: flex-end; display: flex; flex-direction: column; gap: 4px; max-width: 88%; }
+.user-turn .bubble { max-width: 100%; }
 .chip-x { align-items: center; background: none; border: 0; border-radius: 50%; color: inherit; cursor: pointer; display: inline-flex; flex: none; height: 20px; justify-content: center; opacity: .7; padding: 0; width: 20px; }
 .chip-x:hover { background: color-mix(in srgb, var(--agent-text) 10%, transparent); opacity: 1; }
-.box { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: var(--agent-radius); padding: 8px 8px 6px; transition: border-color .15s, box-shadow .15s; }
+.box { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: var(--agent-radius); padding: 8px 8px 6px; position: relative; transition: border-color .15s, box-shadow .15s; }
+/* The host's mention picker positions itself against the composer box (e.g. bottom: 100%). */
+.mention { position: static; }
 .box:focus-within { border-color: var(--agent-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-primary) 12%, transparent); }
 .input { background: none; border: 0; color: inherit; display: block; font: inherit; line-height: 1.5; max-height: var(--agent-composer-max-height); min-height: 44px; outline: none; padding: 2px 6px; resize: none; width: 100%; }
 .input::placeholder { color: var(--agent-muted); }

@@ -1,6 +1,7 @@
 # AGENTS.md: agent-panel
 
-This is the contract for AI agents that use, extend or change `<agent-panel>`. For the
+This is the contract for AI agents that use, extend or change `<agent-panel>` and
+`<agent-page>`. For the
 human-oriented guide, see `README.md` in this folder. This file is the specification: if
 the code and this file disagree, fix one of them in the same change.
 
@@ -13,6 +14,10 @@ the code and this file disagree, fix one of them in the same change.
   paste handling, and drawing.
 - Data goes in through properties (`entries`, `running`, `error`, …). Intent comes out
   through DOM events (`agent-submit`, `agent-stop`, `agent-action`, …).
+- `<agent-page>` (`AgentPageElement`) is a subclass of `AgentPanelElement` laid out for a
+  whole page. It adds a conversation sidebar, a renamable title and a context bar. Every
+  rule here about the panel holds for the page; §6 "Page" adds the page-only rules.
+- "The element" below means either one.
 
 ## 2. Hard rules
 
@@ -20,15 +25,21 @@ the code and this file disagree, fix one of them in the same change.
    library, no icon package, no app code. It has zero dependencies by design, and
    `package.json` must keep no `dependencies`. App-specific behaviour belongs in a
    subclass inside the app that uses the panel.
-2. `agent-panel.js` must not register a tag as a side effect. Only `index.js` calls
-   `AgentPanelElement.define()`. Subclasses define their own tag.
+2. Each entry point defines exactly one tag: `index.js` defines `<agent-panel>`, and
+   `page.js` defines `<agent-page>`. `agent-panel.js` and `agent-page.js` define nothing.
+   Importing the page must never define `<agent-panel>`, and the other way round.
+   Subclasses define their own tag.
 3. Anything that returns HTML for `innerHTML` (`renderMarkdown`, the `markdown` property,
    `h(…, { html })`) must return sanitized markup. The default renderer escapes
    everything. Never pass model output to `html` unsanitized.
 4. Every event is dispatched with `bubbles: true, composed: true`, through `_emit()`.
-5. Keep `attachments.mjs` free of DOM access beyond the `File` and `DataTransfer` objects
+5. `layout(panel)` runs inside the base constructor, before a subclass's own class
+   fields exist. Anything `layout` or `_render` needs must be created inside `layout`, as
+   `AgentPageElement` does with `this._page`. Subclasses must not declare class fields
+   that `layout` or `_render` read.
+6. Keep `attachments.mjs` free of DOM access beyond the `File` and `DataTransfer` objects
    it's given, so it stays testable under `node --test`.
-6. Public names (attributes, properties, events, slots, parts, CSS tokens, `labels` keys)
+7. Public names (attributes, properties, events, slots, parts, CSS tokens, `labels` keys)
    are API. Renaming one is a breaking change: update `README.md`, this file and the
    tests together, and release it under a new minor version while the version is `0.x`
    (see §9). Apps that use the panel pin a tag, so they only pick up the change when they
@@ -38,11 +49,13 @@ the code and this file disagree, fix one of them in the same change.
 
 | Path | Contents |
 |---|---|
-| `agent-panel.js` | `AgentPanelElement` class, `h()`, `icon()`; re-exports `DEFAULT_LIMITS`, `formatBytes`, `readAsBase64`. Exported as `agent-panel/element` |
+| `agent-panel.js` | `AgentPanelElement` class, `h()`, `icon()`, `referenceKey()`; re-exports `DEFAULT_LIMITS`, `formatBytes`, `readAsBase64`. Exported as `agent-panel/element` |
+| `agent-page.js` | `AgentPageElement` class (extends `AgentPanelElement`) and its CSS. Exported as `agent-panel/page-element` |
 | `attachments.mjs` | Pure helpers: `DEFAULT_LIMITS`, `extensionFor`, `filesFromDataTransfer`, `pastedFiles`, `nameFor`, `matchesAccept`, `formatBytes`, `attachmentProblem`, `readAsBase64`. Exported as `agent-panel/attachments` |
 | `styles.js` | `STYLES`: the base shadow CSS and the token defaults |
-| `icons.js` | `ICONS`: MDI SVG paths (Apache-2.0), keyed `paperclip, send, stop, close, chevron, check, alert, file, image, upload` |
+| `icons.js` | `ICONS`: MDI SVG paths (Apache-2.0), keyed `paperclip, send, stop, close, chevron, check, alert, file, image, upload, at, link, history, plus, delete` |
 | `index.js` | Defines `<agent-panel>` and re-exports everything from `agent-panel.js` and `attachments.mjs`. This is the package's main entry, `agent-panel` |
+| `page.js` | Defines `<agent-page>` and re-exports `agent-page.js`, the panel's `AgentPanelElement`, `h`, `icon` and `referenceKey`, and `attachments.mjs`. Exported as `agent-panel/page` |
 | `test/attachments.test.mjs` | Node tests for `attachments.mjs` (`npm test`) |
 | `package.json` | `type: module`, the `exports` map, no dependencies. Apps install it with `npm install github:compdani/agent-panel#vX.Y.Z` |
 
@@ -51,7 +64,11 @@ the code and this file disagree, fix one of them in the same change.
 ```ts
 type Role = 'user' | 'assistant' | string;
 
-interface TextEntry  { id: string; type: 'text'; role: Role; content: string }
+interface Reference  { type: string; id: string | number; label?: string; [extra: string]: unknown }
+// Identity is `${type}:${id}` (referenceKey). Lists are deduplicated by it.
+
+interface TextEntry  { id: string; type: 'text'; role: Role; content: string;
+                       references?: Reference[] } // chips above user bubbles
 interface ToolCall   { id?: string; key?: string; name: string; label?: string;
                        status: 'running' | 'completed' | 'failed'; detail?: unknown }
 interface ToolsEntry { id: string; type: 'tools'; label?: string; tools: ToolCall[] }
@@ -72,12 +89,21 @@ interface Labels {
   remove: string; send: string; stop: string; working: string; usedTools(n: number): string;
 }
 
+interface PageLabels extends Labels {
+  cancel: string; conversations: string; delete: string; deleteConversation(title: string): string;
+  inContext: string; newChat: string; noConversations: string; rename: string; titleLabel: string;
+  untitled: string;
+}
+
+interface Conversation { id: string | number; title?: string; updated?: string | number | Date; href?: string }
+
 declare class AgentPanelElement extends HTMLElement {
   static tagName: string;                       // 'agent-panel'
   static styles: string;                        // collected base → subclass, appended in order
   static readonly observedAttributes: string[];
   static define(tag?: string, registry?: CustomElementRegistry): typeof AgentPanelElement; // idempotent
   static readAsBase64(file: Blob): Promise<string>;
+  static defaultLabels: Labels;                 // subclasses spread and extend it
 
   entries: Entry[];               // non-array → []
   suggestions: string[];          // non-array → []
@@ -85,6 +111,8 @@ declare class AgentPanelElement extends HTMLElement {
   labels: Labels;                 // setter merges a Partial<Labels> over the defaults; redraws all entries
   draft: string;
   readonly attachments: Attachment[];            // shallow copy
+  references: Reference[];                       // returns a copy; setter dedupes and drops items without type/id
+  readonly mention: { open: boolean; query: string };
   readonly limits: Limits;
   error: string;                  // reflects the `error` attribute ('' removes it)
   running: boolean; disabled: boolean; closable: boolean; // reflect boolean attributes
@@ -93,6 +121,10 @@ declare class AgentPanelElement extends HTMLElement {
   addFiles(files: Iterable<File> | FileList, opts?: { pasted?: boolean }): { added: Attachment[]; problems: string[] };
   removeAttachment(id: string): void;
   clearAttachments(): void;
+  addReference(ref: Reference): boolean;         // false if already present (or invalid)
+  removeReference(refOrKey: Reference | string): void;
+  openMention(): void;                           // query '', not tied to typed text
+  closeMention(): void;
   focus(options?: FocusOptions): void;          // focuses the textarea
   scrollToBottom(opts?: { force?: boolean }): void;
   defineEntry(type: string, render: ((entry: Entry, panel: this) => Node) | null): this;
@@ -103,10 +135,29 @@ declare class AgentPanelElement extends HTMLElement {
   renderText(entry: TextEntry): Node;
   renderTools(entry: ToolsEntry): Node;
   renderMarkdown(text: string): string;         // must return safe HTML
+  renderReference(ref: Reference, opts?: { removable?: boolean }): Node;
+  referenceIcon(ref: Reference): Node;
+  fileProblem(file: File, current: Attachment[]): string; // '' = allowed; default = limits
+  layout(panel: HTMLElement): HTMLElement;      // runs in the constructor; returns the shadow root's content
 }
 
+declare class AgentPageElement extends AgentPanelElement {
+  static tagName: string;                       // 'agent-page'
+  static defaultLabels: PageLabels;
+  conversations: Conversation[];                // items without id are dropped
+  active: string;                               // reflects `active`
+  renamable: boolean;                           // reflects `renamable`
+  contextReferences: Reference[];
+  formatDate: (value: unknown) => string;       // non-function → built-in
+  openSidebar(): void; closeSidebar(): void;    // the drawer below 760px
+  startRename(): void;                          // no-op unless renamable
+}
+
+declare function referenceKey(ref: Reference): string;
+
 declare function h(tag: string, props?: Record<string, unknown> | null, ...children: unknown[]): HTMLElement;
-declare function icon(name: keyof typeof ICONS, size?: number, className?: string): SVGSVGElement;
+declare function icon(nameOrPath: keyof typeof ICONS | string, size?: number, className?: string): SVGSVGElement;
+// A string that isn't an icon name and starts with M/m is used as the SVG path itself.
 ```
 
 ## 5. Attributes
@@ -117,6 +168,8 @@ declare function icon(name: keyof typeof ICONS, size?: number, className?: strin
 | `running`, `disabled`, `closable`, `error`, `no-attachments`, `accept` | yes | each redraw, and when used |
 | `max-file-size`, `max-total-size`, `max-files` | no | `addFiles()`, through `limits` |
 | `sticky-attachments` | no | `submit()` |
+| `mention-trigger` | no | each keystroke (`input`) |
+| Page: `active`, `renamable`, `no-sidebar` | yes | each redraw (`no-sidebar` is CSS only) |
 | `theme="dark"` | no (CSS only) | — |
 
 The defaults (`DEFAULT_LIMITS`) are: `accept: 'image/*,application/pdf,text/*'`,
@@ -156,10 +209,13 @@ negative or not a number falls back to its default.
   1. It returns `false` if the trimmed text is empty, or the panel is `running` or
      `disabled`.
   2. It fires a cancelable `agent-submit` with
-     `{ text: trimmed, attachments: copy }`.
-  3. If the event wasn't cancelled, it clears the draft (only when `text` was left out)
-     and clears the attachments (unless `sticky-attachments` is set), then forces scroll
-     following.
+     `{ text: trimmed, attachments: copy, references: copy }`.
+  3. If the event wasn't cancelled, it:
+     - clears the draft (only when `text` was left out);
+     - clears the attachments, unless `sticky-attachments` is set;
+     - clears the references (always; they are never sticky);
+     - closes any mention;
+     - forces scroll following.
   4. It returns `true` unless the event was cancelled.
 - **C3.** Clicking a suggestion calls `submit(suggestionText)`. The draft is kept.
 - **C4.** While `running`, the textarea stays enabled, Stop is shown and Send is hidden.
@@ -200,6 +256,79 @@ negative or not a number falls back to its default.
   size. Its messages are English and can't be changed through `labels`.
 - **A7.** Drag and drop reacts only when `dataTransfer.types` includes `Files`. The
   overlay counts `dragenter` and `dragleave` to avoid flickering.
+- **A8.** `addFiles` checks each file with the `fileProblem(file, current)` hook. The
+  default is `attachmentProblem(file, current, this.limits)`. Overrides should call
+  `super.fileProblem` to keep the limits.
+- **A9.** Paste and drop listeners sit on the element's root (the result of `layout`), so
+  on the page, dropping onto the sidebar attaches too.
+
+### References
+
+- **R1.** `references` holds `Reference`s, deduplicated by `referenceKey`. Items with no
+  `type` or `id` are dropped.
+- **R2.** References show as removable chips in the composer's chip row, before the file
+  chips. The row is hidden while there are no references, no attachments and nothing in
+  the `composer-chips` slot.
+- **R3.** `addReference`, `removeReference` and sending all fire
+  `agent-references-change`. Assigning `references` directly does not fire it.
+- **R4.** Clicking a chip's label fires `agent-reference-open { reference }`, anywhere a
+  chip appears: in the composer, on user messages, and in the page's context bar.
+- **R5.** `referenceIcon(ref)` gives each chip its icon. The default is `file` for
+  `type: 'file'` and `link` for anything else.
+
+### Mentions
+
+- **M1.** Mentions are off unless `mention-trigger` is set. On each `input`, the text
+  before the caret is matched against `(^|\s)TRIGGER([^\sTRIGGER]*)$`:
+  - If it matches, the mention opens or updates, with
+    `{ query, from: index of the trigger }`.
+  - If it doesn't match and the mention came from typing, the mention closes.
+  - A mention opened with `openMention()` (`from = -1`) is not closed by typing.
+- **M2.** `agent-mention { open, query }` fires only when the state actually changes (it
+  opens, closes, or the query changes).
+- **M3.** While a mention is open, the keys ↑, ↓, Enter, Tab and Escape first fire a
+  cancelable `agent-mention-key { key, event }`.
+  - If a listener cancels it, the keydown is prevented and nothing else happens.
+  - If not, Escape closes the mention, and Enter goes on to submit.
+- **M4.** `addReference` while the mention is open from typing (`from >= 0`) cuts
+  `trigger + query` out of the draft, puts the caret there, closes the mention and
+  focuses the textarea.
+- **M5.** The `mention` slot sits inside the composer box (`position: relative`). Its
+  wrapper is `position: static` and is hidden while no mention is open. Host pickers
+  position themselves against the box, e.g. `position: absolute; bottom: 100%`.
+
+### Page
+
+- **P1.** The layout is a grid of the sidebar (`--agent-sidebar-width`) and the panel. The
+  transcript's and composer's content is centred, at most `--agent-content-max-width`
+  wide.
+- **P2.** The host element is the size container (`container: agent-page /
+  inline-size`). A container query can't restyle its own container, so the grid rules
+  live inside the shadow root. At `max-width: 760px`:
+  - the sidebar becomes an off-screen drawer;
+  - the history button appears;
+  - `.page--drawer` opens the drawer and shows a scrim.
+  The drawer closes on a scrim click, Escape, choosing a conversation, or New chat.
+- **P3.** Conversation rows are `<a href>` when `href` is set, otherwise `<button>`.
+  - A plain left click fires a cancelable `agent-select-conversation { id, conversation }`.
+  - If the event is cancelled, or there's no `href`, the click's default is prevented.
+  - Clicks with a modifier key or a non-left button are left to the browser and fire no
+    event.
+  - The row matching `active` gets `.conv--active` and `aria-current="page"`.
+- **P4.** Deleting is two steps: the delete button sets the row to `.conv--confirm`,
+  confirming fires `agent-delete-conversation { id, conversation }`, and cancelling
+  restores the row. The page never removes a row itself.
+- **P5.** Renaming happens only when `renamable` is set. Clicking the title (or calling
+  `startRename()`) swaps in an input with the current `heading`.
+  - Enter or blur commits. If the trimmed value is non-empty and different, the page
+    fires a cancelable `agent-rename { title }`; unless it's cancelled, the page sets the
+    `heading` attribute itself.
+  - Escape discards the edit.
+  - The title shows `labels.untitled` while `heading` is empty.
+- **P6.** The context bar shows `contextReferences` as chips that can't be removed, after
+  `labels.inContext`. It's hidden while the list is empty.
+- **P7.** `formatDate(updated)` labels each row. The built-in format shows the time for
+  today, `Mon D` within this year, and `Mon D, YYYY` otherwise.
 
 ### Events (all `bubbles`, `composed`)
 
@@ -212,26 +341,39 @@ negative or not a number falls back to its default.
 | `agent-attachments-change` | `{ attachments }` | no | add, remove, clear |
 | `agent-attachment-error` | `{ problems }` | no | `addFiles()` |
 | `agent-error-dismiss` | `null` | no | Error banner's close button (after `error = ''`) |
+| `agent-references-change` | `{ references }` | no | `addReference`, `removeReference`, submit (R3) |
+| `agent-reference-open` | `{ reference }` | no | Click on a reference chip (R4) |
+| `agent-mention` | `{ open, query }` | no | Mention state changes (M2) |
+| `agent-mention-key` | `{ key, event }` | yes | Navigation keys while a mention is open (M3) |
+| Page: `agent-select-conversation` | `{ id, conversation }` | yes | Left click on a row (P3) |
+| Page: `agent-new-conversation` | `null` | no | New chat button |
+| Page: `agent-delete-conversation` | `{ id, conversation }` | no | Confirmed delete (P4) |
+| Page: `agent-rename` | `{ title }` | yes | Committed title edit (P5) |
 
 ### Slots
 
 `header-start` (its default content is `heading`), `header-actions`, `subheader` (its row
 is hidden while the slot is empty), `empty` (its default content is the empty-state title
 and text), `transcript-end`, `composer-chips` (the chip row is hidden while there are no
-attachments and the slot is empty), `composer-actions`, and `entry-{id}`. A slot counts as
+attachments and the slot is empty), `composer-actions`, `mention` (M5), and
+`entry-{id}`. The page adds `sidebar-start` and `sidebar-end`, and fills `header-start`'s
+default content with its title and rename field. A slot counts as
 filled when an element is assigned to it, or a text node that isn't just whitespace.
 
 ### Parts and tokens
 
 - **Parts**: `panel header heading close subheader transcript entries empty suggestion
-  bubble message tools error composer attachments attachment input attach hint send stop
-  drop`.
+  bubble message tools error composer attachments attachment reference mention input attach
+  hint send stop drop`. The page adds `page sidebar new-chat conversation-list conversation
+  history title title-input context-bar`.
 - **Tokens** (defaults in `styles.js`): `--agent-primary --agent-on-primary
   --agent-surface --agent-surface-alt --agent-text --agent-muted --agent-border
   --agent-error --agent-success --agent-warning --agent-info --agent-font-size
-  --agent-radius --agent-composer-max-height`.
-- **Reusable classes in the shadow root**: `btn btn--primary btn--tonal btn--icon card
-  badge alert tone-{success,error,warning,info,muted} spinner`.
+  --agent-radius --agent-composer-max-height`. The page adds `--agent-sidebar-width`
+  (250px) and `--agent-content-max-width` (860px).
+- **Reusable classes in the shadow root**: `btn btn--primary btn--tonal btn--icon chip
+  card badge alert tone-{success,error,warning,info,muted} spinner`. The page adds
+  `btn--sm btn--danger`.
 
 ## 7. Recipes
 
@@ -243,7 +385,15 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 | Add a header or composer control from a framework | Light-DOM child with `slot="header-actions"`, `"composer-actions"` and so on. Wrap framework components in a plain element that carries the `slot` attribute |
 | Keep files for follow-up turns | `sticky-attachments`. The host re-reads `panel.attachments` when retrying |
 | Block sending without losing input | `event.preventDefault()` in `agent-submit` |
-| Translate | `panel.labels = { … }`. The `attachmentProblem` messages aren't covered yet |
+| @-mentions of app objects | Set `mention-trigger="@"`. Render a picker into `slot="mention"`, search on `agent-mention`, handle keys on `agent-mention-key` (cancel the event when used), and call `addReference()` on pick (§6 Mentions) |
+| Attach app objects without typing | A button in `composer-actions` that calls `openMention()`, or `addReference()` directly |
+| Pre-attach something, e.g. from a URL | Set `el.references = [...]` after mount |
+| Extra rules for which files are allowed | Override `fileProblem(file, current)`, returning `rule(file) \|\| super.fileProblem(file, current)` |
+| Icons for your reference types | Override `referenceIcon(ref)`, returning `icon(pathFromYourIconSet, 13)` |
+| Use the page with a client-side router | Give conversations an `href` (so new-tab clicks work), and on `agent-select-conversation` call `preventDefault()` and route |
+| Keep the page's sidebar and title in sync | After `agent-rename`, `agent-delete-conversation` and `agent-new-conversation`, update `heading`, `conversations` and `active` yourself |
+| Translate | `el.labels = { … }`, with the page's extra keys on the page (`PageLabels`). The `attachmentProblem` messages aren't covered yet |
+| Add your own label keys | `static defaultLabels = { ...Base.defaultLabels, mine: '…' }`, then read `this.labels.mine` |
 | Retheme | Set the `--agent-*` tokens on the host. In a subclass, set them in `:host {}` inside `static styles` |
 | Change which files are allowed | The `accept` / `max-*` attributes. Keep them in line with what the backend validates |
 | Add a built-in feature to the base | Edit `agent-panel.js` / `styles.js`. Keep the rules in §2. Add it to §4–6 here and to `README.md`. Add a test in `test/` if `attachments.mjs` changes. Check changes visible in the browser in an app that uses the panel (§9) |
@@ -255,8 +405,9 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
   module that defines your subclass) before the host first draws, or arrays arrive as `"[object
   Object]"` attributes. The panel replays properties set before it was defined
   (`connectedCallback` upgrades `entries`, `suggestions`, `markdown`, `labels`, `draft`,
-  `error`, `running`, `disabled`, `closable`), but attributes already set can't be turned
-  back into data.
+  `references`, `error`, `running`, `disabled`, `closable`; the page also `conversations`,
+  `active`, `renamable`, `contextReferences`, `formatDate`), but attributes already set
+  can't be turned back into data.
 - **Vue.**
   - The Vue compiler must list the tag in `compilerOptions.isCustomElement` (for Vite,
     in the `vue()` plugin's `template` options).
@@ -267,6 +418,11 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
     tool's status, a proposal's status) won't trigger an update.
   - A static boolean attribute (`closable`) works because the getters return booleans, so
     Vue maps `''` to `true`.
+  - Write bindings for camel-case properties in camel case (`:contextReferences`,
+    `:formatDate`). Vue checks `key in el` with the name exactly as written, so a
+    hyphenated `:context-references` becomes a string attribute.
+  - A Vue component placed in the `mention` slot must sit inside a native wrapper element
+    (`<div slot="mention"><my-picker …/></div>`).
 - **Shadow DOM in tests.** In Cypress, use `{ includeShadowDom: true }`; in Playwright,
   CSS selectors already reach into open shadow roots. Shadow content is
   found by class (`.message`, `.bubble`, `.chip`, `.scroll`, `.panel`, `.attach-error`,
@@ -276,6 +432,12 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
   `items.add(new win.File(...))`, and dispatch `new win.ClipboardEvent('paste', {
   clipboardData, bubbles: true, composed: true, cancelable: true })` on the textarea, or
   `new win.DragEvent('drop', { dataTransfer, … })` on `.panel`.
+- **Testing local package changes in a Vite app.** Vite pre-bundles dependencies and
+  caches them in `node_modules/.vite`. After copying a changed package into
+  `node_modules/agent-panel`, restart Vite with `--force`, or it keeps serving the old
+  code.
+- **Container queries.** Never put a container query on `.page` (or `.panel`) that is
+  meant to restyle that same element. Query from the host container instead (P2).
 - **Closing does nothing by itself.** `agent-close` is only a request; the host must hide
   the panel.
 - **Error state is shared.** The panel clears `error` when it's dismissed. The host must

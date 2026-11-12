@@ -1,19 +1,44 @@
 {
   "name": "agent-panel",
-  "version": "0.1.0",
-  "description": "A framework-free Web Component chat panel for AI agents: transcript, composer, paste/drop attachments.",
+  "version": "0.2.0",
+  "description": "Framework-free Web Components for AI agent chat: <agent-panel> (side panel) and <agent-page> (full page with conversations). Paste/drop attachments, mentions, references.",
   "type": "module",
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./element": "./agent-panel.js",
+    "./page": "./page.js",
+    "./page-element": "./agent-page.js",
     "./attachments": "./attachments.mjs",
     "./package.json": "./package.json"
   },
-  "files": ["*.js", "*.mjs", "README.md", "AGENTS.md", "CLAUDE.md"],
-  "sideEffects": ["./index.js"],
-  "keywords": ["web-component", "custom-element", "chat", "ai", "agent"],
-  "repository": { "type": "git", "url": "git+https://github.com/compdani/agent-panel.git" },
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test/*.test.mjs" }
+  "files": [
+    "*.js",
+    "*.mjs",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "sideEffects": [
+    "./index.js",
+    "./page.js"
+  ],
+  "keywords": [
+    "web-component",
+    "custom-element",
+    "chat",
+    "ai",
+    "agent",
+    "agent-page"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/compdani/agent-panel.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
 }
