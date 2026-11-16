@@ -2,7 +2,7 @@
 // the File and DataTransfer objects passed in, so these run under Node's test runner too.
 
 export const DEFAULT_LIMITS = Object.freeze({
-  accept: 'image/*,application/pdf,text/*',
+  accept: 'image/*,application/pdf,text/*,.md,.txt,.json,.xml,.doc,.docx,.dot,.odt,.rtf,.ppt,.pptx,.xls,.xlsx,.csv',
   maxFileSize: 6 * 1024 * 1024,
   maxTotalSize: 20 * 1024 * 1024,
   maxFiles: 12,

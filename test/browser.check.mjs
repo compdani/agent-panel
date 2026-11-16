@@ -50,6 +50,21 @@ try {
         document.body.append(panel);
       }
       const tick = () => new Promise(resolve => queueMicrotask(resolve));
+      panel.entries = [{ id: 'asset-only', type: 'text', role: 'user', content: '', assets: [
+        { type: 'asset', id: 'pic', label: 'Uploaded picture', mimeType: 'image/png', url: 'https://example.com/pic.png' },
+        { type: 'asset', id: 'unsafe', label: 'Unsafe', mimeType: 'image/png', url: 'javascript:alert(1)' },
+      ] }];
+      await tick();
+      assert(panel.shadowRoot.querySelector('[data-reference="asset:pic"] img')?.getAttribute('src') === 'https://example.com/pic.png', 'asset-only transcript with preview');
+      assert(!panel.shadowRoot.querySelector('[data-reference="asset:unsafe"] img'), 'unsafe asset preview rejected');
+      let opened;
+      panel.addEventListener('agent-reference-open', e => { opened = e.detail.reference; }, { once: true });
+      panel.shadowRoot.querySelector('[data-reference="asset:pic"] button').click();
+      assert(opened.id === 'pic', 'asset open event');
+      assert(panel.addFiles([new File(['doc'], 'report.docx')]).added.length === 1, 'Word document upload');
+      panel.clearAttachments();
+      panel.entries = [];
+
       const add = () => panel.addFiles([new File(['x'], 'x.txt', { type: 'text/plain' })]).added[0];
       let attachment = add();
       assert(!panel.submit(), 'legacy blank rejected');
@@ -103,6 +118,20 @@ try {
       assert(panel.attachments.length === 1, 'paste');
       panel.shadowRoot.querySelector('.panel').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, composed: true, cancelable: true }));
       assert(panel.attachments.length === 2, 'drop');
+      panel.clearAttachments();
+      const docs = new DataTransfer();
+      docs.items.add(new File(['%PDF'], 'brief.pdf', { type: 'application/pdf' }));
+      docs.items.add(new File(['# Notes'], 'notes.md'));
+      docs.items.add(new File(['word'], 'proposal.docx'));
+      panel.shadowRoot.querySelector('.panel').dispatchEvent(new DragEvent('drop', { dataTransfer: docs, bubbles: true, composed: true, cancelable: true }));
+      assert(panel.attachments.length === 3, 'multi-document drag and drop');
+      panel.clearAttachments();
+      panel.shadowRoot.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: docs, bubbles: true, composed: true, cancelable: true }));
+      assert(panel.attachments.length === 3, 'PDF, Markdown and Word clipboard files');
+      const rejected = new DataTransfer();
+      rejected.items.add(new File(['exe'], 'program.exe', { type: 'application/octet-stream' }));
+      panel.shadowRoot.querySelector('.panel').dispatchEvent(new DragEvent('drop', { dataTransfer: rejected, bubbles: true, composed: true, cancelable: true }));
+      assert(panel.attachments.length === 3, 'drop applies accept validation');
     }, tag);
     console.log(`${tag}: browser checks passed`);
     await page.close();

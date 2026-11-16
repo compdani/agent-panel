@@ -21,6 +21,8 @@ export interface TextEntry {
   content: string;
   /** Chips above user bubbles. */
   references?: Reference[];
+  /** Durable uploaded assets, displayed alongside reference chips. */
+  assets?: import('./openai.mjs').Asset[];
 }
 
 export interface ToolCall {

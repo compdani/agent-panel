@@ -1,3 +1,4 @@
+import { assetUrl } from './openai.mjs';
 // <agent-panel>: a chat panel for an AI agent, as a framework-free custom element.
 //
 // The host owns the conversation and the network; the panel owns the composer. Set
@@ -412,10 +413,10 @@ export class AgentPanelElement extends Base {
   }
 
   renderText(entry) {
-    if (!entry.content) return h('div', { hidden: true });
+    if (!entry.content && !entry.references?.length && !entry.assets?.length) return h('div', { hidden: true });
     if (entry.role === 'user') {
       const bubble = h('div', { class: 'bubble', part: 'bubble', 'data-role': 'user' }, entry.content);
-      const refs = normalizeReferences(entry.references);
+      const refs = normalizeReferences([...(entry.references || []), ...(entry.assets || [])]);
       if (!refs.length) return bubble;
       return h('div', { class: 'user-turn' }, h('div', { class: 'chips chips--end' }, refs.map((ref) => this.renderReference(ref))), bubble);
     }
@@ -461,7 +462,9 @@ export class AgentPanelElement extends Base {
       h(
         'button',
         { type: 'button', class: 'chip-open', onClick: () => this._emit('agent-reference-open', { reference: ref }) },
-        this.referenceIcon(ref),
+        ref.type === 'asset' && String(ref.mimeType || '').startsWith('image/') && assetUrl(ref.url)
+          ? h('img', { class: 'thumb', src: assetUrl(ref.url), alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' })
+          : this.referenceIcon(ref),
         h('span', { class: 'chip-label' }, label),
       ),
       removable ? h('button', {

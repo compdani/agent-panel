@@ -1,6 +1,6 @@
 {
   "name": "agent-panel",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Framework-free Web Components for AI agent chat: <agent-panel> (side panel) and <agent-page> (full page with conversations). Paste/drop attachments, mentions, references.",
   "type": "module",
   "main": "./index.js",
@@ -26,7 +26,11 @@
       "types": "./attachments.d.mts",
       "default": "./attachments.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./openai": {
+      "types": "./openai.d.mts",
+      "default": "./openai.mjs"
+    }
   },
   "files": [
     "*.js",

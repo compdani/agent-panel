@@ -176,7 +176,7 @@ declare function icon(nameOrPath: keyof typeof ICONS | string, size?: number, cl
 | Page: `active`, `renamable`, `no-sidebar` | yes | each redraw (`no-sidebar` is CSS only) |
 | `theme="dark"` | no (CSS only) | — |
 
-The defaults (`DEFAULT_LIMITS`) are: `accept: 'image/*,application/pdf,text/*'`,
+The defaults (`DEFAULT_LIMITS`) are: `accept: 'image/*,application/pdf,text/*,.md,.txt,.json,.xml,.doc,.docx,.dot,.odt,.rtf,.ppt,.pptx,.xls,.xlsx,.csv'`,
 `maxFileSize: 6 MiB`, `maxTotalSize: 20 MiB`, `maxFiles: 12`. A limit attribute that is
 negative or not a number falls back to its default.
 
@@ -472,3 +472,22 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - For upload-first hosts, cancel `agent-submit`, call `clearComposer({ draft: event.detail.fromDraft, attachments: false })` immediately, mark uploads with `setAttachmentState`, then remove the sent attachments after success. Do not clear the draft after uploading: the user may have typed more.
 - Declarations ship for all entry points, with typed event maps and tag maps only in the defining entry points. `npm run check-types` checks NodeNext and bundler resolution without runtime dependencies.
 - Git-free installs: `npm install https://codeload.github.com/compdani/agent-panel/tar.gz/refs/tags/vX.Y.Z`. This avoids git/SSH lockfile requirements in Docker builds.
+
+## 0.2.2 additions
+
+- Default accept additionally includes Markdown/text/JSON/XML extensions, Word, ODT,
+  RTF, PowerPoint and Excel. Size/count defaults are unchanged; hosts can override accept.
+- `TextEntry.assets?: Asset[]` adds durable assets to user transcript chips. Empty-text
+  entries with references/assets render. Image assets with HTTP(S) URLs and image MIME
+  types show lazy thumbnails; clicking dispatches `agent-reference-open` as usual.
+- New `agent-panel/openai` entry point (`openai.mjs`, `openai.d.mts`), with no DOM or
+  network dependency: `assetUrl` validates HTTP(S) URLs; `toOpenAIContent` converts text,
+  local attachments, asset references and assets to Responses API parts;
+  `prepareSubmission(detail, { upload? })` invokes host storage for each attachment and
+  returns `{ assets, content }`. Upload results need `url` or `fileId`. No callback means
+  inline base64 inputs. Other references become text identifiers, not resolved content.
+- Asset shape extends Reference: `type: 'asset', id, label?, name?, mimeType?, size?,
+  url?, fileId?`. OpenAI image conversion accepts PNG/JPEG/WebP/GIF only. Hosts validate
+  content, animation, limits and model support. Host storage, API calls, credentials,
+  failure recovery and persistence remain host responsibilities. Never store blob URLs.
+- `test/openai.test.mjs` covers document acceptance, conversion, uploads and failures.

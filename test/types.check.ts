@@ -25,3 +25,11 @@ AgentPanelElement.define('custom-panel');
 h('button', null, matchesAccept(new File([], 'x.txt'), 'text/*'));
 // @ts-expect-error fromDraft is a boolean
 panel.addEventListener('agent-submit', e => { const s: string = e.detail.fromDraft; });
+
+import { prepareSubmission, toOpenAIContent, type Asset } from 'agent-panel/openai';
+const asset: Asset = { type: 'asset', id: 'a', url: 'https://example.com/a.png', mimeType: 'image/png' };
+panel.entries = [{ id: 'asset', type: 'text', role: 'user', content: '', assets: [asset] }];
+void toOpenAIContent({ assets: [asset] });
+panel.addEventListener('agent-submit', event => {
+  void prepareSubmission(event.detail, { upload: async (file, attachment) => ({ url: 'https://example.com/' + file.name, id: attachment.id }) });
+});

@@ -802,3 +802,80 @@ To check a consuming Event Pocket checkout's actual custom-element subclasses th
 Vue, set `EVENT_POCKET_ROOT` to its `events_admin` directory when running the same
 browser script. It loads the app's renderer, Marked and Vue with the local panel source,
 without changing the app's installed package or contacting its backend.
+
+## Uploaded assets and OpenAI inputs (0.2.2)
+
+Pictures already attach via the paperclip, paste, or drop. Defaults also accept PDF,
+Markdown, JSON, Word, OpenDocument, RTF, PowerPoint and Excel files, including when the
+browser reports no MIME type. Existing limits remain 6 MiB per file, 20 MiB total,
+12 files; change `accept` and `max-*` to match your backend.
+
+`agent-panel/openai` provides dependency-free helpers for the **Responses API**.
+`toOpenAIContent({ text, attachments, references, assets })` returns content parts:
+images become `input_image`, documents become `input_file`. Asset references
+(`{ type: 'asset', id, label?, name?, mimeType?, url?, fileId? }`) can be added with
+`panel.addReference(asset)` or a host asset picker. URLs must be HTTP(S); use URLs
+OpenAI can fetch, or server-uploaded OpenAI file IDs. Image assets should supply
+`mimeType`, especially with extensionless URLs or file IDs. Ordinary references become
+text identifiers; the host must resolve their full contents if needed.
+
+`prepareSubmission(detail, { upload })` first calls your upload function once per
+attachment, then returns `{ assets, content }`. The upload callback receives
+`(file, attachment)` and returns asset metadata with a durable `url` or OpenAI `fileId`.
+Without an upload callback, files are encoded inline. This package does not provide
+storage or credentials. Keep OpenAI API keys on your server.
+
+```js
+import { prepareSubmission } from 'agent-panel/openai';
+
+panel.setAttribute('allow-empty-text', ''); // permit picture/document-only messages
+panel.addEventListener('agent-submit', async event => {
+  event.preventDefault(); // keep files and draft on failure
+  if (panel.running) return;
+  const detail = event.detail;
+  panel.running = true;
+  detail.attachments.forEach(a => panel.setAttachmentState(a.id, { busy: true }));
+  try {
+    const { assets, content } = await prepareSubmission(detail, {
+      upload: async file => {
+        const body = new FormData();
+        body.append('file', file);
+        const response = await fetch('/api/assets', { method: 'POST', body });
+        if (!response.ok) throw Error('Asset upload failed');
+        return response.json(); // e.g. { id, url, mimeType, name }
+      },
+    });
+    // Your server passes input: [{ role: 'user', content }] to responses.create.
+    const response = await fetch('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) throw Error('Message failed');
+    panel.entries = [...panel.entries, {
+      id: crypto.randomUUID(), type: 'text', role: 'user',
+      content: detail.text, references: detail.references, assets,
+    }];
+    // Only clear the draft if the user has not changed it while waiting.
+    panel.clearComposer({ draft: panel.draft.trim() === detail.text, attachments: false, references: false });
+    detail.attachments.forEach(a => panel.removeAttachment(a.id));
+    detail.references.forEach(ref => panel.removeReference(ref));
+  } catch (error) {
+    panel.error = error.message;
+  } finally {
+    detail.attachments.forEach(a => panel.setAttachmentState(a.id, null));
+    panel.running = false;
+  }
+});
+```
+
+Persist returned assets in conversation state; never persist temporary composer blob
+preview URLs. `TextEntry.assets` draws asset chips, including image thumbnails, even
+for a message with no text. Clicking uses `agent-reference-open`, so the host chooses
+how to open/download an asset. Upload retries should use host-side deduplication to
+avoid duplicate stored assets after a partial failure.
+
+The Responses API supports more document formats than Chat Completions (PDF-only file
+parts). See [OpenAI file inputs](https://developers.openai.com/api/docs/guides/file-inputs).
+Use a vision-capable model for images/PDF page images. OpenAI image input accepts PNG,
+JPEG, WebP and non-animated GIF; unsupported image MIME types are rejected by the helper.
+The host must validate actual files, API limits and model compatibility on its server.
