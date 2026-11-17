@@ -186,6 +186,17 @@ try {
       panel.addReference({ type: 'campaign', id: 7, label: 'Spring' });
       assert(panel.draft === 'Compare ' && !panel.mention.open, 'picking cuts @query out of the editor');
       panel.references = [];
+      panel.draft = 'Compare';
+      editor.blur();
+      const outside = document.createRange();
+      outside.selectNodeContents(document.body);
+      outside.collapse(true);
+      document.getSelection().removeAllRanges();
+      document.getSelection().addRange(outside);
+      panel.addReference({ type: 'list', id: 3, label: 'Customers' });
+      document.execCommand('insertText', false, ' these');
+      assert(panel.draft === 'Compare these', `focus() puts the caret at the end (${panel.draft})`);
+      panel.references = [];
       panel.draft = 'Say **hello** to *all*';
       assert(editor.querySelector('strong')?.textContent === 'hello' && editor.querySelector('em')?.textContent === 'all', 'markdown draft shows formatted');
       assert(panel.draft === 'Say **hello** to *all*', 'draft round-trips as markdown');

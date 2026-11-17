@@ -527,7 +527,18 @@ export class AgentPanelElement extends Base {
     this.scrollToBottom({ force: true });
   }
 
-  focus(options) { this.$input.focus(options); }
+  focus(options) {
+    // A contenteditable focused from elsewhere puts the caret at the start; put it at
+    // the end, as a textarea does, unless the caret was already inside the editor.
+    const wasInside = this._plain() || Boolean(this._editorRange());
+    this.$input.focus(options);
+    if (!wasInside) {
+      const end = document.createRange();
+      end.selectNodeContents(this.$editor);
+      end.collapse(false);
+      this._setCaret(end);
+    }
+  }
 
   scrollToBottom({ force = false } = {}) {
     if (force) this._follow = true;

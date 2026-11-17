@@ -665,3 +665,9 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - The composer is a rich-text editor by default (C6): bold and italic, sent as markdown,
   rich paste reduced to bold and italic. `plain-text` keeps the textarea. User bubbles
   render bold and italic (D6a).
+
+## 0.3.1
+
+- `focus()` on the rich-text editor puts the caret at the end when it wasn't already in
+  the editor (a focused contenteditable otherwise starts at the beginning), so text typed
+  after `addReference()` or `openMention()` lands after the draft, as in the textarea.
