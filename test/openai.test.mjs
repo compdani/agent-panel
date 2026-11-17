@@ -49,3 +49,24 @@ test('unsafe URLs and unsupported images fail explicitly', async () => {
   }
   await assert.rejects(toOpenAIContent({ attachments: [new File(['svg'], 'a.svg', { type: 'image/svg+xml' })] }), /Unsupported/);
 });
+test('asset URLs are sent normalized, and URLs with credentials are refused', async () => {
+  const [part] = await toOpenAIContent({ assets: [{ type: 'asset', id: 1, url: ' https:example.com/a.png\n' }] });
+  assert.equal(part.image_url, 'https://example.com/a.png');
+  assert.equal(assetUrl('https://user:pass@example.com/a.png'), '');
+  await assert.rejects(toOpenAIContent({ assets: [{ type: 'asset', id: 2, url: 'https://user:pass@example.com/a.pdf' }] }));
+});
+test('an explicit MIME type wins over the file extension', async () => {
+  const [pdf] = await toOpenAIContent({ assets: [{ type: 'asset', id: 1, mimeType: 'application/pdf', name: 'scan.png', url: 'https://example.com/x' }] });
+  assert.equal(pdf.type, 'input_file');
+  const [svgNamed] = await toOpenAIContent({ assets: [{ type: 'asset', id: 2, mimeType: 'application/pdf', name: 'diagram.svg', url: 'https://example.com/y' }] });
+  assert.equal(svgNamed.type, 'input_file');
+  const [png] = await toOpenAIContent({ assets: [{ type: 'asset', id: 3, mimeType: 'Image/PNG; charset=binary', url: 'https://example.com/z' }] });
+  assert.equal(png.type, 'input_image');
+});
+test('upload results cannot change an asset\'s type', async () => {
+  const file = new File(['pic'], 'p.png', { type: 'image/png' });
+  const { assets } = await prepareSubmission({ text: '', attachments: [{ id: 'att-1', file, name: 'p.png', type: 'image/png', size: 3 }] },
+    { upload: async () => ({ id: 'stored-1', type: 'file', url: 'https://example.com/p.png' }) });
+  assert.equal(assets[0].type, 'asset');
+  assert.equal(assets[0].id, 'stored-1');
+});

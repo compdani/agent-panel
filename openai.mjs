@@ -5,22 +5,27 @@ const imageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'
 export function assetUrl(value) {
   try {
     const url = new URL(value);
+    // Credentials in a URL would be forwarded to whoever fetches it.
+    if (url.username || url.password) return '';
     return ['https:', 'http:'].includes(url.protocol) ? url.href : '';
   } catch { return ''; }
 }
 
 function imageType(asset) {
-  if (asset.mimeType?.startsWith('image/')) return asset.mimeType;
-  const ext = String(asset.name || asset.url || '').split(/[?#]/)[0].split('.').pop().toLowerCase();
+  // An explicit MIME type wins over the name or URL extension.
+  const declared = String(asset.mimeType || '').split(';')[0].trim().toLowerCase();
+  if (declared) return declared.startsWith('image/') ? declared : '';
+  const ext = String(asset.name || assetUrl(asset.url) || '').split(/[?#]/)[0].split('.').pop().toLowerCase();
   return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml' })[ext] || '';
 }
 
 function assetContent(asset) {
   const mime = imageType(asset);
   if (mime && !imageTypes.has(mime)) throw new TypeError(`Unsupported OpenAI image type: ${mime}`);
-  if (!asset.fileId && !assetUrl(asset.url)) throw new TypeError('Assets need an HTTP(S) URL or OpenAI fileId.');
-  if (mime) return { type: 'input_image', detail: 'auto', ...(asset.fileId ? { file_id: asset.fileId } : { image_url: asset.url }) };
-  return { type: 'input_file', ...(asset.fileId ? { file_id: asset.fileId } : { file_url: asset.url }) };
+  const url = assetUrl(asset.url);
+  if (!asset.fileId && !url) throw new TypeError('Assets need an HTTP(S) URL or OpenAI fileId.');
+  if (mime) return { type: 'input_image', detail: 'auto', ...(asset.fileId ? { file_id: asset.fileId } : { image_url: url }) };
+  return { type: 'input_file', ...(asset.fileId ? { file_id: asset.fileId } : { file_url: url }) };
 }
 
 /** Convert a submission to Responses API user content. Ordinary references stay text. */
@@ -52,7 +57,7 @@ export async function prepareSubmission(detail, { upload } = {}) {
     for (const attachment of attachments) {
       const stored = await upload(attachment.file, attachment);
       const asset = { type: 'asset', id: attachment.id, name: attachment.name,
-        label: attachment.name, mimeType: attachment.type, size: attachment.size, ...stored };
+        label: attachment.name, mimeType: attachment.type, size: attachment.size, ...stored, type: 'asset' };
       assetContent(asset); // Reject unusable upload results before sending anything.
       assets.push(asset);
     }

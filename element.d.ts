@@ -72,16 +72,69 @@ export interface AttachmentState {
 }
 
 export interface Labels {
+  add: string;
+  addContext: string;
+  addFile: string;
   attach: string;
+  attachFiles: string;
   attachHint: string;
+  attachLink: string;
+  cancel: string;
   close: string;
+  defaultModel: string;
+  defaultModelNamed(name: string): string;
   dismiss: string;
   drop: string;
+  invalidLink: string;
+  linkUrl: string;
+  model: string;
+  noModels: string;
+  options: string;
+  pasteContent: string;
+  pasteName: string;
+  pasteText: string;
   remove: string;
+  resetOptions: string;
+  searchModels: string;
   send: string;
   stop: string;
   working: string;
   usedTools(n: number): string;
+}
+
+/** A choice in the model menu. Strings are shorthand for `{ id }`. */
+export interface ModelChoice {
+  id: string;
+  label?: string;
+  /** Items with the same group are listed under one heading (e.g. the provider). */
+  group?: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+/** An entry in the options menu: a pick-one list with `choices`, otherwise an on/off toggle. */
+export interface AgentOption {
+  id: string;
+  label?: string;
+  choices?: Array<string | number | boolean | { value: unknown; label?: string }>;
+  /** Toggles default to false; lists to their first choice. */
+  default?: unknown;
+  description?: string;
+  disabled?: boolean;
+}
+
+/** Built-in "+" menu items. */
+export type BuiltInAddItem = 'attach' | 'paste' | 'context' | 'link';
+
+/** A host's own "+" menu item. With `reference`, picking it adds that reference. */
+export interface AddMenuItem {
+  id: string;
+  label: string;
+  icon?: IconName | string;
+  group?: string;
+  description?: string;
+  reference?: Reference;
+  disabled?: boolean;
 }
 
 export interface ClearComposerOptions {
@@ -96,6 +149,10 @@ export interface SubmitDetail {
   references: Reference[];
   /** True when the draft was sent, false for `submit(text)` and suggestion clicks. */
   fromDraft: boolean;
+  /** The chosen model id; `''` is the default. */
+  model: string;
+  /** Every option's value, defaults included. */
+  options: Record<string, unknown>;
 }
 
 export interface AgentPanelEventMap {
@@ -110,11 +167,18 @@ export interface AgentPanelEventMap {
   'agent-reference-open': CustomEvent<{ reference: Reference }>;
   'agent-mention': CustomEvent<{ open: boolean; query: string }>;
   'agent-mention-key': CustomEvent<{ key: string; event: KeyboardEvent }>;
+  /** Cancelable: cancelling keeps the current model. */
+  'agent-model-change': CustomEvent<{ model: string; previous: string }>;
+  /** Cancelable. `id` is `null` for "Reset to defaults". `values` is the result. */
+  'agent-option-change': CustomEvent<{ id: string | null; value: unknown; values: Record<string, unknown> }>;
+  /** Cancelable: cancelling skips the built-in action (file picker, paste form, adding `reference`…). */
+  'agent-menu-select': CustomEvent<{ id: string; item: AddMenuItem }>;
 }
 
 export type IconName =
   | 'paperclip' | 'send' | 'stop' | 'close' | 'chevron' | 'check' | 'alert' | 'file'
-  | 'image' | 'upload' | 'at' | 'link' | 'history' | 'plus' | 'delete';
+  | 'image' | 'upload' | 'at' | 'link' | 'history' | 'plus' | 'delete'
+  | 'tune' | 'paste' | 'chevron-down' | 'search';
 
 export declare class AgentPanelElement extends HTMLElement {
   static tagName: string;
@@ -147,6 +211,20 @@ export declare class AgentPanelElement extends HTMLElement {
   running: boolean;
   disabled: boolean;
   closable: boolean;
+  /** The model menu; empty hides it. Returns a copy with ids as strings. */
+  get models(): ModelChoice[];
+  set models(value: Array<string | ModelChoice> | null | undefined);
+  /** The chosen model id; `''` means the default (`default-model` names it). */
+  model: string;
+  /** The options menu; empty hides it. */
+  get options(): AgentOption[];
+  set options(value: AgentOption[] | null | undefined);
+  /** Every option's value, defaults included. Setting it replaces the chosen values. */
+  get optionValues(): Record<string, unknown>;
+  set optionValues(value: Record<string, unknown> | null | undefined);
+  /** The "+" menu. Default `['attach', 'paste', 'context']`; `null` restores it. */
+  get addMenu(): Array<BuiltInAddItem | AddMenuItem>;
+  set addMenu(value: Array<BuiltInAddItem | AddMenuItem> | null | undefined);
 
   submit(text?: string): boolean;
   clearComposer(options?: ClearComposerOptions): void;

@@ -23,6 +23,13 @@ test('files listed under both files and items are taken once', () => {
   assert.deepEqual(filesFromDataTransfer(null), []);
 });
 
+test('distinct files with the same name, size, type and date are all kept', () => {
+  const a = file('scan.png', 'image/png');
+  const b = file('scan.png', 'image/png');
+  assert.deepEqual(filesFromDataTransfer(transfer([a, b])), [a, b]);
+  assert.deepEqual(filesFromDataTransfer(transfer([a, b], { itemsOnly: true })), [a, b]);
+});
+
 test('a pasted screenshot attaches', () => {
   const shot = file('image.png', 'image/png');
   assert.deepEqual(pastedFiles(transfer([shot])), [shot]);

@@ -39,14 +39,16 @@ sends something.
 8. [Transcript entries](#transcript-entries)
 9. [Attachments](#attachments)
 10. [References and mentions](#references-and-mentions)
-11. [Slots](#slots)
-12. [Styling](#styling)
-13. [Extending the panel](#extending-the-panel)
-14. [The agent page](#the-agent-page)
-15. [Using it from a framework](#using-it-from-a-framework)
-16. [Accessibility](#accessibility)
-17. [Browser support and limits](#browser-support-and-limits)
-18. [Development and releases](#development-and-releases)
+11. [Composer menus](#composer-menus)
+12. [Rich text in the composer](#rich-text-in-the-composer)
+13. [Slots](#slots)
+14. [Styling](#styling)
+15. [Extending the panel](#extending-the-panel)
+16. [The agent page](#the-agent-page)
+17. [Using it from a framework](#using-it-from-a-framework)
+18. [Accessibility](#accessibility)
+19. [Browser support and limits](#browser-support-and-limits)
+20. [Development and releases](#development-and-releases)
 
 ---
 
@@ -156,13 +158,17 @@ same name.
 | `running` | boolean | off | The agent is working: shows the indicator and the Stop button, and blocks sending. *Reflected.* |
 | `disabled` | boolean | off | Disables typing, sending and attaching. *Reflected.* |
 | `error` | string | `""` | Error message shown at the end of the transcript. *Reflected.* |
-| `accept` | string | `image/*,application/pdf,text/*` | Allowed file types, written as in `<input type="file" accept>`: MIME types, wildcards like `image/*`, or extensions like `.txt`. Leave it empty to allow anything. |
+| `accept` | string | images, PDF, text, Markdown/JSON/XML, Word, ODT, RTF, PowerPoint, Excel (see `DEFAULT_LIMITS.accept`) | Allowed file types, written as in `<input type="file" accept>`: MIME types, wildcards like `image/*`, or extensions like `.txt`. Leave it empty to allow anything. |
 | `max-file-size` | bytes | `6291456` (6 MiB) | Largest single file. |
 | `max-total-size` | bytes | `20971520` (20 MiB) | Largest combined size of all attachments. |
 | `max-files` | number | `12` | Most files attached at once. |
 | `no-attachments` | boolean | off | Hides the paperclip and ignores pasted and dropped files. |
 | `allow-empty-text` | boolean | off | Allows a blank draft to send when attachments or references are present. Explicit `submit('')` still fails. |
 | `sticky-attachments` | boolean | off | Keeps attachments after sending, so every message carries them until they're removed. |
+| `plain-text` | boolean | off | Uses a plain `<textarea>` instead of the rich-text composer. |
+| `no-add-menu` | boolean | off | Shows the paperclip button instead of the "+" menu. |
+| `default-model` | string | `""` | The name shown for the model menu's Default entry, e.g. `gpt-4o`. |
+| `no-default-model` | boolean | off | Leaves the Default entry out of the model menu. |
 | `mention-trigger` | string | none | A character, usually `@`, that opens a mention while typing. See [References and mentions](#references-and-mentions). |
 | `theme` | `"dark"` | none | Built-in dark colours, for pages that don't set their own [colour tokens](#styling). |
 
@@ -246,7 +252,7 @@ All events bubble and cross the shadow boundary (`composed`).
 
 | Event | `detail` | Cancelable | When |
 |---|---|---|---|
-| `agent-submit` | `{ text, attachments, references, fromDraft }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
+| `agent-submit` | `{ text, attachments, references, fromDraft, model, options }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
 | `agent-stop` | — | no | The Stop button is pressed. |
 | `agent-close` | — | no | The close button is pressed. The panel doesn't hide itself. |
 | `agent-action` | `{ action, ...}` | yes | A button in a custom entry called `emitAction()`. |
@@ -379,6 +385,73 @@ picker.onPick = (item) => panel.addReference({ type: item.type, id: item.id, lab
 ```
 
 ---
+
+## Composer menus
+
+The composer's bottom row has three menus. Each is optional and has sensible defaults.
+They look like list_pocket's model menu: a card above the composer, grouped and searchable.
+
+```text
+┌──────────────────────────────────────────────────────┐
+│ Ask anything…                                        │
+│ [+]                      [⚙]  [Default (gpt-4o) ▾]  (↑) │
+└──────────────────────────────────────────────────────┘
+```
+
+**"+" menu** (on by default). Attach files, Paste text (a small form that adds a text
+file, like list_pocket's Paste data) and Add context (only with `mention-trigger`). Add
+`'link'` for an "Attach link" form when your backend accepts asset URLs. Add your own items,
+grouped under headings; an item with a `reference` attaches it when picked:
+
+```js
+panel.addMenu = ['attach', 'paste', 'context', 'link',
+  { id: 'kit-1', label: 'Spring kit', group: 'Brand kits', reference: { type: 'brand_kit', id: 1, label: 'Spring kit' } },
+  { id: 'assets', label: 'Browse site assets…', icon: 'image' }, // handle in agent-menu-select
+];
+panel.addEventListener('agent-menu-select', (e) => {
+  if (e.detail.id === 'assets') openAssetPicker();
+});
+```
+
+Set `no-add-menu` to keep the old paperclip button instead.
+
+**Model menu** (shows once `models` is set). A "Default" entry comes first (name the
+server's default with `default-model="gpt-4o"`, or hide it with `no-default-model`).
+Models with a `group` are listed under it, and more than seven get a search field.
+
+```js
+panel.models = [{ id: 'gpt-5', group: 'OpenAI' }, { id: 'claude-opus-5-5', group: 'Anthropic' }];
+panel.model = localStorage.getItem('model') || ''; // '' = default
+panel.addEventListener('agent-model-change', (e) => localStorage.setItem('model', e.detail.model));
+```
+
+**Options menu** (shows once `options` is set). Pick-one lists and on/off toggles, each with
+a default, plus "Reset to defaults":
+
+```js
+panel.options = [
+  { id: 'effort', label: 'Reasoning effort', choices: [{ value: '', label: 'Model default' }, 'low', 'medium', 'high'] },
+  { id: 'autoApply', label: 'Auto-apply edits' },          // toggle, default off
+  { id: 'brandKit', label: 'Include brand kit', default: true },
+];
+panel.optionValues = JSON.parse(localStorage.getItem('options') || '{}');
+panel.addEventListener('agent-option-change', (e) => localStorage.setItem('options', JSON.stringify(e.detail.values)));
+```
+
+`agent-submit` includes `model` and `options` (every value, defaults filled in), so
+the send handler doesn't need to track them. All three events are cancelable. Parts:
+`add-menu` (also `attach`), `model-menu`, `options-menu`, `menu` (the open card).
+
+## Rich text in the composer
+
+The message box accepts rich text. **Cmd/Ctrl+B** bolds and **Cmd/Ctrl+I** italicizes,
+and pasting from Google Docs, Word or a web page keeps bold and italic while dropping
+everything else (links, colours, images, scripts). The message is sent as markdown,
+`**bold**` and `*italic*`, the same syntax the assistant's replies are rendered from, and
+your own bubbles show the formatting. Plain messages are sent exactly as typed.
+
+`draft` reads and writes markdown. Set `plain-text` to use a plain `<textarea>` instead.
+Underline isn't offered, because markdown has no underline.
 
 ## Slots
 
@@ -574,7 +647,7 @@ the page.
 | `renamable` | boolean | Clicking the title edits it. Enter or leaving the field saves; Escape cancels. Saving fires `agent-rename`. |
 | `active` | string | The id of the open conversation, highlighted in the list. *Reflected.* |
 | `no-sidebar` (attribute) | boolean | Hides the conversation list. |
-| `conversations` (property) | `[{ id, title, updated?, href? }]` | The list. With `href`, rows are real links, so they can be opened in a new tab. |
+| `conversations` (property) | `[{ id, title, updated?, href? }]` | The list. With `href`, rows are real links, so they can be opened in a new tab. Only relative and HTTP(S) links are used; others (`javascript:`, `data:`…) are dropped and the row becomes a button. |
 | `contextReferences` (property) | `Reference[]` | References already part of the conversation, shown in the "in context" bar under the header. Hidden while empty. |
 | `formatDate` (property) | `(value) => string` | Formats `updated` in the list. By default, today's dates show the time and other dates show the day. |
 
@@ -791,11 +864,13 @@ For standalone browser regression checks (Chromium), install Playwright outside 
 package, then run:
 
 ```sh
-PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node test/browser.check.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs npm run test:browser
+# Another engine: BROWSER=webkit (or firefox) in front of the same command.
 ```
 
 Run `npm run check-types` for NodeNext and bundler declaration checks. Browser regression
-checks cover both tags, entry-point isolation, submission, chip states, paste and drop.
+checks cover both tags, entry-point isolation, submission, chip states, paste and drop,
+focus kept across redraws, preview URL release, conversation link safety and IME Enter.
 These supplement the consuming app's integration checks.
 
 To check a consuming Event Pocket checkout's actual custom-element subclasses through
@@ -879,3 +954,32 @@ parts). See [OpenAI file inputs](https://developers.openai.com/api/docs/guides/f
 Use a vision-capable model for images/PDF page images. OpenAI image input accepts PNG,
 JPEG, WebP and non-animated GIF; unsupported image MIME types are rejected by the helper.
 The host must validate actual files, API limits and model compatibility on its server.
+
+## Fixes in 0.2.3
+
+- Conversation `href`s must be relative or HTTP(S); anything else renders a button row.
+- Ctrl/⌘/Shift/Alt and non-left clicks never fire `agent-select-conversation`, on any row.
+- On narrow pages the closed drawer is hidden from keyboard and screen readers, the
+  history button reports `aria-expanded`, and focus moves into and back out of the drawer.
+  Delete is always visible on touch screens.
+- Sidebar rows, context chips, composer chips and suggestions are rebuilt only when their
+  data changes, so focus and clicks survive streaming redraws.
+- Image preview `blob:` URLs are released when the element is removed, and recreated if
+  it is attached again. Moving the element keeps them.
+- Setting `labels`, `markdown` or `defineEntry()` keeps open tool groups open.
+- Renderers may return any `Node`; text nodes and fragments are wrapped in a `div`.
+- A user turn with no text draws only its chips, without an empty bubble.
+- Safari's IME-confirming Enter (`keyCode 229`) no longer sends.
+- `agent-mention` fires only when `open` or `query` changes.
+- A blank limit attribute (`max-files=""`) uses the default.
+- `conversations` and `contextReferences` return copies.
+- Drops keep distinct files that share a name, size, type and date.
+- OpenAI helpers send the normalized URL, refuse URLs with credentials, prefer an explicit
+  `mimeType` over the extension, and keep `type: 'asset'` whatever the upload returns.
+
+## New in 0.3.0
+
+Built-in composer menus: "+", model and options. See [Composer menus](#composer-menus).
+The "+" button replaces the paperclip by default; `no-add-menu` keeps the paperclip.
+The composer is a rich-text box (bold and italic, sent as markdown); `plain-text` keeps the
+textarea. Tests that select `textarea` should select `[part=input]` instead.

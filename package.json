@@ -1,6 +1,6 @@
 {
   "name": "agent-panel",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Framework-free Web Components for AI agent chat: <agent-panel> (side panel) and <agent-page> (full page with conversations). Paste/drop attachments, mentions, references.",
   "type": "module",
   "main": "./index.js",
@@ -62,6 +62,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.check.mjs",
     "check-types": "npx -y -p typescript@5.6.3 tsc -p test/tsconfig.json && npx -y -p typescript@5.6.3 tsc -p test/tsconfig.json --module ESNext --moduleResolution Bundler"
   }
 }

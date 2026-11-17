@@ -2,7 +2,6 @@
 import type { AgentPanelElement, AgentPanelEventMap, Labels } from './element.js';
 
 export interface PageLabels extends Labels {
-  cancel: string;
   conversations: string;
   delete: string;
   deleteConversation(title: string): string;

@@ -33,3 +33,17 @@ void toOpenAIContent({ assets: [asset] });
 panel.addEventListener('agent-submit', event => {
   void prepareSubmission(event.detail, { upload: async (file, attachment) => ({ url: 'https://example.com/' + file.name, id: attachment.id }) });
 });
+
+panel.models = ['gpt-5', { id: 'claude-opus-5-5', group: 'Anthropic' }];
+panel.options = [{ id: 'effort', choices: ['low', 'high'], default: 'high' }, { id: 'auto', label: 'Auto-apply' }];
+panel.addMenu = ['attach', 'paste', { id: 'kit', label: 'Kit', group: 'Brand kits', reference: { type: 'brand_kit', id: 1 } }];
+panel.addEventListener('agent-model-change', e => { const m: string = e.detail.model; });
+panel.addEventListener('agent-option-change', e => { const id: string | null = e.detail.id; });
+panel.addEventListener('agent-submit', e => { const m: string = e.detail.model; void e.detail.options.effort; });
+// @ts-expect-error unknown built-in item
+panel.addMenu = ['camera'];
+import type { AddMenuItem, AgentOption, ModelChoice } from 'agent-panel/page';
+const pageModels: ModelChoice[] = [{ id: 'x' }];
+const pageOptions: AgentOption[] = [{ id: 'y' }];
+const pageItems: AddMenuItem[] = [{ id: 'z', label: 'Z' }];
+page.models = pageModels; page.options = pageOptions; page.addMenu = pageItems;

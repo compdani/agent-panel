@@ -4,6 +4,29 @@
 // title and an "in context" bar. This module defines no tag: page.js does.
 import { AgentPanelElement, h, icon } from './agent-panel.js';
 
+// Conversation links may be relative or HTTP(S); anything else (javascript:, data:…) is
+// dropped, and the row becomes a button.
+function safeHref(href) {
+  if (href == null) return '';
+  // Read the scheme the way the URL parser does: tabs and newlines removed, and
+  // leading/trailing controls and spaces trimmed (so "java\tscript:" is still caught).
+  const raw = String(href);
+  const clean = raw.replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
+  if (!clean) return '';
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(clean);
+  if (!scheme) return raw; // Relative.
+  return ['http', 'https'].includes(scheme[1].toLowerCase()) ? raw : '';
+}
+
+// A comparable snapshot of plain data; anything unserializable never compares equal.
+function dataKey(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Symbol('unserializable');
+  }
+}
+
 const PAGE_LABELS = {
   cancel: 'Cancel',
   conversations: 'Conversations',
@@ -23,7 +46,8 @@ const PAGE_STYLES = `
 .page { background: var(--agent-surface); display: grid; grid-template-columns: var(--agent-sidebar-width) minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; position: relative; }
 :host([no-sidebar]) .page { grid-template-columns: minmax(0, 1fr); }
 :host([no-sidebar]) .convs, :host([no-sidebar]) .history, :host([no-sidebar]) .scrim { display: none !important; }
-.panel { min-width: 0; }
+/* Its own stacking context, so composer menus stay under the drawer and scrim. */
+.panel { min-width: 0; z-index: 0; }
 
 .convs { background: var(--agent-surface); border-right: 1px solid var(--agent-border); display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 12px 8px; }
 .new-chat { flex: none; width: 100%; }
@@ -39,7 +63,8 @@ const PAGE_STYLES = `
 .conv-del { display: none; }
 .conv:hover .conv-when, .conv:focus-within .conv-when { display: none; }
 .conv:hover .conv-del, .conv:focus-within .conv-del { display: inline-flex; }
-.btn--sm { font-size: 12px; min-height: 24px; padding: 4px 8px; }
+/* Touch screens can't hover: always offer Delete there. */
+@media (hover: none) { .conv-when { display: none; } .conv-del { display: inline-flex; } }
 .btn--danger { background: var(--agent-error); color: #fff; }
 
 .head { border-bottom: 1px solid var(--agent-border); gap: 10px; padding: 8px 16px; }
@@ -59,14 +84,14 @@ const PAGE_STYLES = `
 
 @container agent-page (max-width: 760px) {
   .page { grid-template-columns: minmax(0, 1fr); }
-  .convs { bottom: 0; box-shadow: 0 12px 36px rgba(0, 0, 0, .22); left: 0; position: absolute; top: 0; transform: translateX(-105%); transition: transform .2s; width: min(300px, 85%); z-index: 6; }
-  .page--drawer .convs { transform: none; }
+  .convs { bottom: 0; box-shadow: 0 12px 36px rgba(0, 0, 0, .22); left: 0; position: absolute; top: 0; transform: translateX(-105%); transition: transform .2s, visibility 0s .2s; visibility: hidden; width: min(300px, 85%); z-index: 6; }
+  .page--drawer .convs { transform: none; transition: transform .2s; visibility: visible; }
   .page--drawer .scrim { background: rgba(0, 0, 0, .32); display: block; inset: 0; position: absolute; z-index: 5; }
   .history { display: inline-flex; }
   .inner { padding-left: 12px; padding-right: 12px; }
   .composer { padding-left: 12px; padding-right: 12px; }
 }
-@media (prefers-reduced-motion: reduce) { .convs { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .convs, .page--drawer .convs { transition: none; } }
 `;
 
 // Same day: the time; otherwise the date.
@@ -94,7 +119,7 @@ export class AgentPageElement extends AgentPanelElement {
   // ---- Properties -------------------------------------------------------------------
 
   // The sidebar list: [{ id, title, updated?, href? }]. With `href`, rows are real links.
-  get conversations() { return this._page.conversations; }
+  get conversations() { return this._page.conversations.slice(); }
 
   set conversations(value) {
     this._page.conversations = Array.isArray(value) ? value.filter((c) => c && c.id != null) : [];
@@ -111,7 +136,7 @@ export class AgentPageElement extends AgentPanelElement {
   set renamable(value) { this.toggleAttribute('renamable', Boolean(value)); }
 
   // References already part of the conversation, shown in a bar under the header.
-  get contextReferences() { return this._page.context; }
+  get contextReferences() { return this._page.context.slice(); }
 
   set contextReferences(value) {
     this._page.context = Array.isArray(value) ? value.filter((r) => r && r.type != null && r.id != null) : [];
@@ -217,8 +242,35 @@ export class AgentPageElement extends AgentPanelElement {
   // ---- Internals --------------------------------------------------------------------
 
   _setDrawer(open) {
+    const was = this._page.drawer;
     this._page.drawer = Boolean(open);
     this.$page.classList.toggle('page--drawer', this._page.drawer);
+    this.$history.setAttribute('aria-expanded', String(this._page.drawer));
+    // While the drawer slides out it is still visible; keep it out of reach until
+    // `visibility: hidden` takes over (.2s). Cleared first on open, so focus can enter.
+    const narrow = this.$history.offsetParent !== null; // A drawer at this width.
+    // Opening closes any composer menu, every time. Focus goes back to the menu's trigger
+    // unless it's about to move into the drawer.
+    if (this._page.drawer) this._closeMenu({ focus: !(narrow && !was) });
+    if (was === this._page.drawer) return;
+    clearTimeout(this._page.inertTimer);
+    this.$sidebar.inert = false;
+    if (!narrow) return;
+    if (this._page.drawer) {
+      (this.$convList.querySelector('[aria-current="page"]') || this.$newChat).focus();
+      return;
+    }
+    if (this._sidebarHasFocus()) this.$history.focus();
+    this.$sidebar.inert = true;
+    this._page.inertTimer = setTimeout(() => { this.$sidebar.inert = false; }, 250);
+  }
+
+  // Focus inside the sidebar, including controls slotted into sidebar-start/-end.
+  _sidebarHasFocus() {
+    if (this.$sidebar.contains(this.shadowRoot.activeElement)) return true;
+    const active = this.getRootNode().activeElement; // The page may sit in another shadow root.
+    return Array.from(this.$sidebar.querySelectorAll('slot'))
+      .some((slot) => slot.assignedElements({ flatten: true }).some((el) => el.contains(active)));
   }
 
   _commitRename() {
@@ -232,12 +284,18 @@ export class AgentPageElement extends AgentPanelElement {
   }
 
   _select(conversation, e) {
-    // Let the browser handle new-tab clicks on links.
-    if (conversation.href && (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
+    // Modifier and non-left clicks are the browser's (new tab on links); they select nothing.
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const href = safeHref(conversation.href);
     const accepted = this._emit('agent-select-conversation', { id: conversation.id, conversation }, { cancelable: true });
-    if (!accepted || !conversation.href) e.preventDefault();
+    if (!accepted || !href) e.preventDefault();
     this._page.confirming = '';
     this._setDrawer(false);
+  }
+
+  _focusRow(id, selector) {
+    const row = Array.from(this.$convList.children).find((el) => el.dataset.conversationId === id);
+    row?.querySelector(selector)?.focus();
   }
 
   _renderConversation(conversation) {
@@ -245,8 +303,9 @@ export class AgentPageElement extends AgentPanelElement {
     const id = String(conversation.id);
     const title = conversation.title || labels.untitled;
     const confirming = this._page.confirming === id;
-    const link = conversation.href
-      ? h('a', { class: 'conv-link', href: conversation.href, title })
+    const href = safeHref(conversation.href);
+    const link = href
+      ? h('a', { class: 'conv-link', href, title })
       : h('button', { type: 'button', class: 'conv-link', title });
     link.textContent = title;
     if (id === this.active) link.setAttribute('aria-current', 'page');
@@ -269,7 +328,8 @@ export class AgentPageElement extends AgentPanelElement {
           'aria-label': labels.cancel,
           onClick: () => {
             this._page.confirming = '';
-            this._schedule();
+            this._render();
+            this._focusRow(id, '.conv-link');
           },
         }, icon('close', 14)),
       ]
@@ -282,7 +342,8 @@ export class AgentPageElement extends AgentPanelElement {
           'data-action': 'delete',
           onClick: () => {
             this._page.confirming = id;
-            this._schedule();
+            this._render();
+            this._focusRow(id, '[data-action="confirm-delete"]');
           },
         }, icon('delete', 15)),
       ];
@@ -304,15 +365,28 @@ export class AgentPageElement extends AgentPanelElement {
     this.$titleInput.setAttribute('aria-label', labels.titleLabel);
     this.$history.setAttribute('aria-label', labels.conversations);
     this.$history.title = labels.conversations;
+    this.$history.setAttribute('aria-expanded', String(this._page.drawer));
     this.$sidebar.setAttribute('aria-label', labels.conversations);
     this.$newChat.lastChild.textContent = labels.newChat;
 
-    const { conversations, context } = this._page;
+    const page = this._page;
+    const { conversations, context } = page;
     this.$convEmpty.textContent = labels.noConversations;
-    this.$convList.replaceChildren(...(conversations.length ? conversations.map((c) => this._renderConversation(c)) : [this.$convEmpty]));
+    // Rows are rebuilt only when what they show changes, so focus and clicks in the
+    // sidebar survive redraws caused by the transcript.
+    const listKey = dataKey([conversations, this.active, page.confirming, conversations.map((c) => (c.updated ? page.formatDate(c.updated) : ''))]);
+    if (listKey !== page.listKey || labels !== page.listLabels) {
+      page.listKey = listKey;
+      page.listLabels = labels;
+      this.$convList.replaceChildren(...(conversations.length ? conversations.map((c) => this._renderConversation(c)) : [this.$convEmpty]));
+    }
 
     this.$contextBar.hidden = !context.length;
     this.$contextLabel.textContent = labels.inContext;
-    this.$contextChips.replaceChildren(...context.map((ref) => this.renderReference(ref)));
+    const contextKey = dataKey(context);
+    if (contextKey !== page.contextKey) {
+      page.contextKey = contextKey;
+      this.$contextChips.replaceChildren(...context.map((ref) => this.renderReference(ref)));
+    }
   }
 }

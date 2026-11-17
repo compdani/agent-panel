@@ -4,8 +4,8 @@ import type { AgentPageElement } from './page-element.js';
 export * from './page-element.js';
 export { AgentPanelElement, h, icon, referenceKey } from './element.js';
 export type {
-  AgentPanelEventMap, Attachment, AttachmentState, ClearComposerOptions, CustomEntry, Entry, IconName, Labels,
-  Reference, Role, SubmitDetail, TextEntry, ToolCall, ToolsEntry,
+  AddMenuItem, AgentOption, AgentPanelEventMap, Attachment, AttachmentState, BuiltInAddItem, ClearComposerOptions,
+  CustomEntry, Entry, IconName, Labels, ModelChoice, Reference, Role, SubmitDetail, TextEntry, ToolCall, ToolsEntry,
 } from './element.js';
 export * from './attachments.mjs';
 

@@ -30,21 +30,21 @@ export function extensionFor(mime) {
 }
 
 // Every file in a paste or drop, once. Browsers list the same file under both `files`
-// and `items`, and a pasted screenshot sometimes only under `items`.
+// and `items`, and a pasted screenshot sometimes only under `items`. Each entry in `files`
+// is kept, even when two distinct files share a name, size, type and date; `items` only
+// adds files that `files` doesn't already list.
 export function filesFromDataTransfer(dataTransfer) {
   if (!dataTransfer) return [];
-  const out = [];
-  const seen = new Set();
-  const push = (file) => {
-    if (!file) return;
-    const key = `${file.name}|${file.size}|${file.type}|${file.lastModified}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(file);
-  };
-  Array.from(dataTransfer.files || []).forEach(push);
+  const key = (file) => `${file.name}|${file.size}|${file.type}|${file.lastModified}`;
+  const out = Array.from(dataTransfer.files || []).filter(Boolean);
+  const listed = new Map();
+  out.forEach((file) => listed.set(key(file), (listed.get(key(file)) || 0) + 1));
   Array.from(dataTransfer.items || []).forEach((item) => {
-    if (item.kind === 'file') push(item.getAsFile());
+    const file = item.kind === 'file' ? item.getAsFile() : null;
+    if (!file) return;
+    const left = listed.get(key(file)) || 0;
+    if (left) listed.set(key(file), left - 1);
+    else out.push(file);
   });
   return out;
 }

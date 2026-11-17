@@ -5,26 +5,79 @@ import { assetUrl } from './openai.mjs';
 // `entries` to show the transcript, listen for `agent-submit` to send. See README.md
 // for the full API and how to extend it. This module defines no tag: index.js does.
 import {
-  DEFAULT_LIMITS, attachmentProblem, formatBytes, nameFor, pastedFiles, filesFromDataTransfer, readAsBase64,
+  DEFAULT_LIMITS, attachmentProblem, formatBytes, matchesAccept, nameFor, pastedFiles, filesFromDataTransfer, readAsBase64,
 } from './attachments.mjs';
 import { ICONS } from './icons.js';
+import {
+  inlineMarkdownToHTML, runsFromNode, runsFromText, runsToHTML, runsToMarkdown,
+} from './richtext.mjs';
 import { STYLES } from './styles.js';
 
 // Importable (but inert) where there's no DOM, e.g. during server rendering.
 const Base = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
 
 const DEFAULT_LABELS = {
+  add: 'Add',
+  addContext: 'Add context',
+  addFile: 'Add',
   attach: 'Attach files',
+  attachFiles: 'Attach files',
   attachHint: 'Attach files (you can also paste or drop them)',
+  attachLink: 'Attach link',
+  cancel: 'Cancel',
   close: 'Close',
+  defaultModel: 'Default',
+  defaultModelNamed: (name) => `Default (${name})`,
   dismiss: 'Dismiss',
   drop: 'Drop files to attach',
+  invalidLink: 'Enter a link that starts with http:// or https://',
+  linkUrl: 'Link',
+  model: 'Model',
+  noModels: 'No matching models',
+  options: 'Options',
+  pasteContent: 'Text to attach',
+  pasteName: 'File name',
+  pasteText: 'Paste text',
   remove: 'Remove',
+  resetOptions: 'Reset to defaults',
+  searchModels: 'Search models',
   send: 'Send',
   stop: 'Stop',
   usedTools: (n) => `Used ${n} tools`,
   working: 'Working',
 };
+
+// The "+" menu's items when the host doesn't set `addMenu`. 'link' is left out because the
+// backend has to accept asset links; hosts that do can add it.
+const DEFAULT_ADD_MENU = ['attach', 'paste', 'context'];
+
+// Models: 'gpt-x' or { id, label?, group?, description? }. Ids are strings.
+function normalizeModels(list) {
+  return (Array.isArray(list) ? list : []).map((m) => {
+    if (typeof m === 'string' || typeof m === 'number') return { id: String(m) };
+    return m && m.id != null ? { ...m, id: String(m.id) } : null;
+  }).filter(Boolean);
+}
+
+// Options: { id, label, choices?, default?, description? }. With `choices` it's a pick-one
+// list, otherwise an on/off toggle. Choices are 'value' or { value, label }.
+function normalizeOptions(list) {
+  return (Array.isArray(list) ? list : []).filter((o) => o && o.id != null).map((o) => {
+    const choices = Array.isArray(o.choices)
+      ? o.choices.map((c) => (c && typeof c === 'object' ? { value: c.value, label: c.label ?? String(c.value) } : { value: c, label: String(c) }))
+      : null;
+    return { ...o, id: String(o.id), label: o.label ?? String(o.id), type: choices ? 'select' : 'toggle', choices };
+  });
+}
+
+function optionDefault(option) {
+  if (option.type === 'toggle') return Boolean(option.default);
+  return option.default !== undefined ? option.default : (option.choices[0]?.value ?? '');
+}
+
+const TEXT_TYPES = { csv: 'text/csv', json: 'application/json', md: 'text/markdown', tsv: 'text/tab-separated-values', html: 'text/html', xml: 'text/xml' };
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+const extensionOf = (name) => (/\.([a-z0-9]+)$/i.exec(name || '')?.[1] || '').toLowerCase();
 
 // h('button', { class: 'btn', onClick }, 'Text', node): a small DOM builder for the
 // panel and its subclasses. `html` sets innerHTML, so only pass markup you trust.
@@ -101,6 +154,15 @@ function normalizeReferences(list) {
   });
 }
 
+// A comparable snapshot of plain data; anything unserializable never compares equal.
+function dataKey(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Symbol('unserializable');
+  }
+}
+
 const MENTION_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape']);
 
 let nextId = 0;
@@ -116,7 +178,8 @@ export class AgentPanelElement extends Base {
 
   static get observedAttributes() {
     return ['heading', 'placeholder', 'hint', 'empty-title', 'empty-text', 'running', 'disabled', 'closable',
-      'no-attachments', 'accept', 'error', 'allow-empty-text'];
+      'no-attachments', 'accept', 'error', 'allow-empty-text', 'mention-trigger', 'no-add-menu', 'default-model', 'no-default-model',
+      'plain-text'];
   }
 
   static define(tag = this.tagName, registry = globalThis.customElements) {
@@ -143,6 +206,12 @@ export class AgentPanelElement extends Base {
     this._attachError = '';
     this._entriesDirty = true;
     this._scheduled = false;
+    this._models = [];
+    this._model = '';
+    this._options = [];
+    this._optionValues = {};
+    this._addMenu = null;
+    this._menu = null; // { name: 'add' | 'model' | 'options', view, query } while one is open
     this.attachShadow({ mode: 'open' });
     this._build();
   }
@@ -183,13 +252,25 @@ export class AgentPanelElement extends Base {
     this._rerenderEntries();
   }
 
-  get draft() { return this.$input.value; }
+  // The composer's text. In the rich-text editor (the default) bold and italic read as
+  // markdown (**bold**, *italic*); setting markdown shows it formatted.
+  get draft() {
+    return this._plain() ? this.$textarea.value : runsToMarkdown(runsFromNode(this.$editor));
+  }
 
   set draft(value) {
-    this.$input.value = String(value ?? '');
-    this._grow();
+    const text = String(value ?? '');
+    if (this._plain()) {
+      this.$textarea.value = text;
+      this._grow();
+    } else {
+      this.$editor.innerHTML = inlineMarkdownToHTML(text, { breaks: true });
+    }
     this._schedule();
   }
+
+  // The element typed into: the rich-text editor, or the textarea with `plain-text`.
+  get $input() { return this._plain() ? this.$textarea : this.$editor; }
 
   // What's waiting in the composer: [{ id, file, name, type, size, previewUrl, base64() }].
   get attachments() { return this._attachments.slice(); }
@@ -203,6 +284,50 @@ export class AgentPanelElement extends Base {
     this._schedule();
   }
 
+  // The model menu: ['id', …] or [{ id, label?, group?, description? }]. Empty hides it.
+  get models() { return this._models.slice(); }
+
+  set models(value) {
+    this._models = normalizeModels(value);
+    this._schedule();
+  }
+
+  // The chosen model's id; '' means the default (see `default-model`).
+  get model() { return this._model; }
+
+  set model(value) {
+    this._model = value == null ? '' : String(value);
+    this._schedule();
+  }
+
+  // The options menu: [{ id, label, choices?, default?, description? }]. Empty hides it.
+  get options() { return this._options.slice(); }
+
+  set options(value) {
+    this._options = normalizeOptions(value);
+    this._schedule();
+  }
+
+  // Every option's current value, defaults included: { [id]: value }. Setting it replaces
+  // the chosen values; options left out go back to their defaults.
+  get optionValues() {
+    return Object.fromEntries(this._options.map((o) => [o.id, o.id in this._optionValues ? this._optionValues[o.id] : optionDefault(o)]));
+  }
+
+  set optionValues(value) {
+    this._optionValues = { ...(value && typeof value === 'object' ? value : {}) };
+    this._schedule();
+  }
+
+  // The "+" menu: built-in names ('attach', 'paste', 'context', 'link') and the host's own
+  // items { id, label, icon?, group?, reference?, disabled? }. Null restores the defaults.
+  get addMenu() { return (this._addMenu || DEFAULT_ADD_MENU).slice(); }
+
+  set addMenu(value) {
+    this._addMenu = Array.isArray(value) ? value.slice() : null;
+    this._schedule();
+  }
+
   // { open, query } while the person is typing a mention (see `mention-trigger`).
   get mention() {
     return { open: Boolean(this._mention), query: this._mention?.query ?? '' };
@@ -210,8 +335,9 @@ export class AgentPanelElement extends Base {
 
   get limits() {
     const num = (attr, fallback) => {
-      const n = Number(this.getAttribute(attr));
-      return this.hasAttribute(attr) && Number.isFinite(n) && n >= 0 ? n : fallback;
+      const raw = (this.getAttribute(attr) ?? '').trim();
+      const n = Number(raw);
+      return raw && Number.isFinite(n) && n >= 0 ? n : fallback;
     };
     return {
       accept: this.getAttribute('accept') ?? DEFAULT_LIMITS.accept,
@@ -329,11 +455,23 @@ export class AgentPanelElement extends Base {
   addReference(ref) {
     if (!ref || ref.type == null || ref.id == null) return false;
     if (this._mention && this._mention.from >= 0) {
-      const { from, query } = this._mention;
+      const { from, query, node } = this._mention;
       const end = from + this._trigger().length + query.length;
-      const text = this.draft;
-      this.draft = text.slice(0, from) + text.slice(end);
-      this.$input.setSelectionRange(from, from);
+      if (node) {
+        // Rich text: cut "@query" out of the text node it was typed in.
+        if (this.$editor.contains(node)) {
+          const range = document.createRange();
+          range.setStart(node, Math.min(from, node.length));
+          range.setEnd(node, Math.min(end, node.length));
+          range.deleteContents();
+          this.$editor.focus();
+          this._setCaret(range);
+        }
+      } else {
+        const text = this.draft;
+        this.draft = text.slice(0, from) + text.slice(end);
+        this.$input.setSelectionRange(from, from);
+      }
     }
     this.closeMention();
     const isNew = !this._references.some((r) => referenceKey(r) === referenceKey(ref));
@@ -370,7 +508,7 @@ export class AgentPanelElement extends Base {
     const message = String(fromDraft ? this.draft : text).trim();
     if (this.running || this.disabled || !(message || (fromDraft && this._canSendEmpty()))) return false;
     const accepted = this._emit('agent-submit', {
-      text: message, attachments: this.attachments, references: this.references, fromDraft,
+      text: message, attachments: this.attachments, references: this.references, fromDraft, model: this._model, options: this.optionValues,
     }, { cancelable: true });
     if (accepted) this.clearComposer({ draft: fromDraft, attachments: !this.hasAttribute('sticky-attachments') });
     return accepted;
@@ -415,10 +553,11 @@ export class AgentPanelElement extends Base {
   renderText(entry) {
     if (!entry.content && !entry.references?.length && !entry.assets?.length) return h('div', { hidden: true });
     if (entry.role === 'user') {
-      const bubble = h('div', { class: 'bubble', part: 'bubble', 'data-role': 'user' }, entry.content);
+      // Bold and italic from the composer show as formatting; everything else is text.
+      const bubble = entry.content ? h('div', { class: 'bubble', part: 'bubble', 'data-role': 'user', html: inlineMarkdownToHTML(entry.content) }) : null;
       const refs = normalizeReferences([...(entry.references || []), ...(entry.assets || [])]);
-      if (!refs.length) return bubble;
-      return h('div', { class: 'user-turn' }, h('div', { class: 'chips chips--end' }, refs.map((ref) => this.renderReference(ref))), bubble);
+      if (!refs.length) return bubble || h('div', { hidden: true });
+      return h('div', { class: 'user-turn', 'data-role': bubble ? null : 'user' }, h('div', { class: 'chips chips--end' }, refs.map((ref) => this.renderReference(ref))), bubble);
     }
     return h('div', { class: 'message', part: 'message', 'data-role': entry.role || 'assistant', html: this.renderMarkdown(entry.content) });
   }
@@ -492,10 +631,21 @@ export class AgentPanelElement extends Base {
 
   connectedCallback() {
     // Properties set before the element was defined shadow the accessors; replay them.
-    this._upgradeProperties(['entries', 'suggestions', 'markdown', 'labels', 'draft', 'references', 'error', 'running', 'disabled', 'closable']);
+    this._upgradeProperties(['entries', 'suggestions', 'markdown', 'labels', 'draft', 'references', 'error', 'running', 'disabled', 'closable',
+      'models', 'model', 'options', 'optionValues', 'addMenu']);
     if (!this._resize && typeof ResizeObserver !== 'undefined') {
       this._resize = new ResizeObserver(() => this.scrollToBottom());
       this._resize.observe(this.$inner);
+    }
+    if (this._previewsRevoked) {
+      // Removed earlier and its previews released: make them again.
+      this._previewsRevoked = false;
+      this._attachments.forEach((a) => {
+        if (!a.previewUrl) return;
+        URL.revokeObjectURL(a.previewUrl); // Harmless if already revoked; frees one made while detached.
+        a.previewUrl = URL.createObjectURL(a.file);
+      });
+      this._chipsKey = null;
     }
     this._render();
   }
@@ -503,9 +653,24 @@ export class AgentPanelElement extends Base {
   disconnectedCallback() {
     this._resize?.disconnect();
     this._resize = null;
+    if (this._menu) this._closeMenu({ focus: false });
+    // A move disconnects and reconnects in one task; only release previews if it stays out.
+    queueMicrotask(() => {
+      if (this.isConnected || this._previewsRevoked) return;
+      this._previewsRevoked = true;
+      this._attachments.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+    });
   }
 
-  attributeChangedCallback() {
+  attributeChangedCallback(name, previous, value) {
+    if (name === 'plain-text' && (previous === null) !== (value === null) && this.$editor) {
+      // Carry the draft across when switching between the editor and the textarea.
+      if (value === null) this.$editor.innerHTML = inlineMarkdownToHTML(this.$textarea.value, { breaks: true });
+      else {
+        this.$textarea.value = runsToMarkdown(runsFromNode(this.$editor));
+        this._grow();
+      }
+    }
     this._schedule();
   }
 
@@ -554,7 +719,8 @@ export class AgentPanelElement extends Base {
     const was = this._mention;
     this._mention = next;
     if (!was && !next) return;
-    if (was && next && was.query === next.query && was.from === next.from) return;
+    // Only open, close and query changes are news; a moved trigger (`from`) is not.
+    if (was && next && was.query === next.query) return;
     this._emit('agent-mention', this.mention);
     this._schedule();
   }
@@ -563,15 +729,35 @@ export class AgentPanelElement extends Base {
   _trackMention() {
     const trigger = this._trigger();
     if (!trigger) return;
-    const caret = this.$input.selectionStart ?? this.draft.length;
     const t = escapeRegExp(trigger);
-    const match = this.draft.slice(0, caret).match(new RegExp(`(^|\\s)${t}([^\\s${t}]*)$`));
-    if (match) this._setMention({ query: match[2], from: caret - match[2].length - trigger.length });
-    else if (this._mention && this._mention.from >= 0) this._setMention(null);
+    const pattern = new RegExp(`(^|\\s)${t}([^\\s${t}]*)$`);
+    if (this._plain()) {
+      const caret = this.$textarea.selectionStart ?? this.draft.length;
+      const match = this.draft.slice(0, caret).match(pattern);
+      if (match) return this._setMention({ query: match[2], from: caret - match[2].length - trigger.length });
+    } else {
+      // Rich text: match within the text node holding the caret.
+      const range = this._editorRange();
+      let node = range?.collapsed ? range.startContainer : null;
+      let offset = range?.startOffset ?? 0;
+      // WebKit can leave the caret between nodes (editor, 1) rather than in the text.
+      if (node?.nodeType === 1 && node.childNodes[offset - 1]?.nodeType === 3) {
+        node = node.childNodes[offset - 1];
+        offset = node.length;
+      }
+      if (node?.nodeType === 3) {
+        const match = node.data.slice(0, offset).match(pattern);
+        if (match) return this._setMention({ query: match[2], from: offset - match[2].length - trigger.length, node });
+      }
+    }
+    if (this._mention && this._mention.from >= 0) this._setMention(null);
   }
 
+  // Every entry is redrawn, but the old nodes stay around so open <details> carry over.
   _rerenderEntries() {
-    this._nodes = new Map();
+    this._nodes.forEach((row) => { row.signature = Symbol('stale'); });
+    this._chipsKey = null;
+    this._suggestionsKey = null;
     this._entriesDirty = true;
     this._schedule();
   }
@@ -585,8 +771,129 @@ export class AgentPanelElement extends Base {
     });
   }
 
+  _plain() {
+    return this.hasAttribute('plain-text');
+  }
+
+  // The caret or selection inside the editor as a Range, or null. Chromium has
+  // shadowRoot.getSelection; Safari and Firefox expose selections inside a shadow root
+  // through getComposedRanges (document.getSelection() alone points at the host there).
+  _editorRange() {
+    let found = null;
+    if (this.shadowRoot.getSelection) {
+      const sel = this.shadowRoot.getSelection();
+      if (sel?.rangeCount) found = sel.getRangeAt(0);
+    } else {
+      const sel = document.getSelection();
+      if (sel?.getComposedRanges) {
+        try {
+          [found] = sel.getComposedRanges({ shadowRoots: [this.shadowRoot] });
+        } catch {
+          try { [found] = sel.getComposedRanges(this.shadowRoot); } catch { found = null; }
+        }
+      }
+      if (!found && sel?.rangeCount) found = sel.getRangeAt(0);
+    }
+    if (!found || !this.$editor.contains(found.startContainer) || !this.$editor.contains(found.endContainer)) return null;
+    // getComposedRanges gives a StaticRange, which goes stale when the text changes.
+    const range = document.createRange();
+    try {
+      range.setStart(found.startContainer, found.startOffset);
+      range.setEnd(found.endContainer, found.endOffset);
+    } catch {
+      return null;
+    }
+    return range;
+  }
+
+  _setCaret(range) {
+    const sel = this.shadowRoot.getSelection ? this.shadowRoot.getSelection() : document.getSelection();
+    if (!sel) return;
+    if (sel.setBaseAndExtent) sel.setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset);
+    else {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  // Inserts runs at `at` (or the caret, or the end) as editor HTML. insertHTML keeps the
+  // browser's undo history; where it isn't supported, the runs are inserted directly.
+  _insertRuns(runs, at = null) {
+    if (!runs.length) return;
+    const editor = this.$editor;
+    editor.focus();
+    let range = at || this._editorRange();
+    if (!range) {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+    this._setCaret(range);
+    const html = runsToHTML(runs);
+    let done = false;
+    try {
+      // Trust its answer: replacing a selection with the same text changes nothing visible.
+      done = document.execCommand('insertHTML', false, html);
+    } catch {
+      done = false;
+    }
+    if (!done) {
+      range.deleteContents();
+      const fragment = range.createContextualFragment(html);
+      const last = fragment.lastChild;
+      range.insertNode(fragment);
+      if (last) {
+        range.setStartAfter(last);
+        range.collapse(true);
+        this._setCaret(range);
+      }
+    }
+    this._onInput();
+  }
+
+  // Text from a clipboard or drop: bold and italic from its HTML, else its plain text.
+  _runsFrom(data) {
+    const html = data.getData('text/html');
+    const runs = html ? runsFromNode(new DOMParser().parseFromString(html, 'text/html').body, { collapse: true }) : [];
+    return runs.length ? runs : runsFromText(data.getData('text/plain'));
+  }
+
+  _onInput() {
+    this._grow();
+    this._trackMention();
+    this._renderControls();
+  }
+
+  // Pasted rich text keeps its bold and italic; everything else becomes plain text.
+  // Files go to the panel's own paste handling when they can be attached; otherwise only
+  // the clipboard's text is used, so the browser never inserts an image or raw HTML.
+  _onEditorPaste(e) {
+    const data = e.clipboardData;
+    if (!data) return;
+    if (pastedFiles(data).length && this._canAttach()) return;
+    e.preventDefault();
+    if (this.disabled) return;
+    this._insertRuns(this._runsFrom(data));
+  }
+
+  // Dropped text goes where it was dropped (the event's target range), reduced like a paste.
+  _onEditorDrop(e) {
+    e.preventDefault();
+    if (this.disabled || !e.dataTransfer) return;
+    const target = e.getTargetRanges?.()[0];
+    let range = null;
+    if (target && this.$editor.contains(target.startContainer)) {
+      range = document.createRange();
+      range.setStart(target.startContainer, target.startOffset);
+      range.setEnd(target.endContainer, target.endOffset);
+    }
+    const runs = this._runsFrom(e.dataTransfer); // Readable only during the event.
+    queueMicrotask(() => this._insertRuns(runs, range));
+  }
+
   _grow() {
-    const el = this.$input;
+    if (this._plain() === false) return;
+    const el = this.$textarea;
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }
@@ -605,9 +912,30 @@ export class AgentPanelElement extends Base {
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    const rich = e.currentTarget === this.$editor;
+    if (rich && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      const key = e.key.toLowerCase();
+      if (key === 'b' || key === 'i') {
+        e.preventDefault();
+        document.execCommand(key === 'b' ? 'bold' : 'italic');
+        this._onInput();
+        return;
+      }
+      if (key === 'u') {
+        e.preventDefault(); // Markdown has no underline.
+        return;
+      }
+    }
+    // Safari ends IME composition with an Enter whose isComposing is false but keyCode 229.
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+    if (!e.shiftKey) {
       e.preventDefault();
       this.submit();
+    } else if (rich) {
+      // A <br>, not the <div> browsers make for a new line.
+      e.preventDefault();
+      document.execCommand('insertLineBreak');
+      this._onInput();
     }
   }
 
@@ -647,16 +975,32 @@ export class AgentPanelElement extends Base {
     this.$fileChips = h('span', { class: 'chips-files' });
     this.$chipSlot = slot('composer-chips');
     this.$chips = h('div', { class: 'chips', part: 'attachments', hidden: true }, this.$refChips, this.$fileChips, this.$chipSlot);
-    this.$input = h('textarea', {
+    this.$textarea = h('textarea', {
       class: 'input',
       part: 'input',
       rows: 1,
-      onInput: () => {
-        this._grow();
-        this._trackMention();
-        this._renderControls();
-      },
+      hidden: true,
+      onInput: () => this._onInput(),
       onKeydown: (e) => this._onKeydown(e),
+    });
+    // The default composer: rich text limited to bold and italic, read back as markdown.
+    this.$editor = h('div', {
+      class: 'input input--rich is-empty',
+      part: 'input',
+      contenteditable: 'true',
+      role: 'textbox',
+      'aria-multiline': 'true',
+      spellcheck: 'true',
+      onInput: () => this._onInput(),
+      onKeydown: (e) => this._onKeydown(e),
+      onPaste: (e) => this._onEditorPaste(e),
+      // Only bold and italic: other formatting (menus, touch bars) is refused.
+      onBeforeinput: (e) => {
+        const type = e.inputType || '';
+        if (type === 'insertFromDrop') return this._onEditorDrop(e);
+        if ((type.startsWith('format') && !['formatBold', 'formatItalic', 'formatRemove'].includes(type))
+          || ['insertOrderedList', 'insertUnorderedList', 'insertHorizontalRule', 'insertLink'].includes(type)) e.preventDefault();
+      },
     });
     this.$fileInput = h('input', {
       type: 'file',
@@ -668,6 +1012,44 @@ export class AgentPanelElement extends Base {
       },
     });
     this.$attach = h('button', { type: 'button', class: 'btn btn--icon', part: 'attach', onClick: () => this.$fileInput.click() }, icon('paperclip'));
+    const trigger = (name, part, cls, ...content) => h('button', {
+      type: 'button',
+      class: cls,
+      part,
+      'aria-haspopup': 'menu',
+      'aria-expanded': 'false',
+      'data-menu': name,
+      onClick: () => this._toggleMenu(name),
+      // A press moves focus from the menu to its trigger before the click toggles it.
+      onPointerdown: () => {
+        this._pressingTrigger = true;
+        setTimeout(() => { this._pressingTrigger = false; });
+      },
+      onKeydown: (e) => {
+        if (e.key === 'Escape' && this._menu?.name === name) {
+          e.preventDefault();
+          e.stopPropagation();
+          this._closeMenu({ focus: false });
+        } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !this._menu) {
+          e.preventDefault();
+          this._openMenu(name);
+        }
+      },
+    }, ...content);
+    // "attach" stays in the part list so hosts' ::part(attach) styles still apply.
+    this.$add = trigger('add', 'add-menu attach', 'btn btn--icon', icon('plus'));
+    this.$optionsButton = trigger('options', 'options-menu', 'btn btn--icon', icon('tune'));
+    this.$modelLabel = h('span', { class: 'model-label' });
+    this.$modelButton = trigger('model', 'model-menu', 'btn btn--tonal btn--sm model-trigger', this.$modelLabel, icon('chevron-down', 16));
+    this.$popover = h('div', {
+      class: 'menu-pop', part: 'menu', hidden: true, onKeydown: (e) => this._onMenuKeydown(e),
+      // Tabbing (or clicking) somewhere else closes the menu.
+      onFocusout: (e) => {
+        const to = e.relatedTarget;
+        const toTrigger = to === this._trigger$(this._menu?.name);
+        if (this._menu && to && !this.$popover.contains(to) && !(toTrigger && this._pressingTrigger)) this._closeMenu({ focus: false });
+      },
+    });
     this.$hint = h('span', { class: 'hint', part: 'hint' });
     this.$stop = h('button', { type: 'button', class: 'btn btn--icon btn--tonal', part: 'stop', onClick: () => this._emit('agent-stop') }, icon('stop'));
     this.$send = h('button', { type: 'submit', class: 'btn btn--icon btn--primary', part: 'send' }, icon('send'));
@@ -684,7 +1066,12 @@ export class AgentPanelElement extends Base {
       },
       this.$attachError,
       this.$chips,
-      h('div', { class: 'box' }, this.$mention, this.$input, h('div', { class: 'row' }, this.$attach, slot('composer-actions'), this.$hint, h('div', { class: 'spacer' }), this.$stop, this.$send)),
+      h('div', { class: 'box' }, this.$mention, this.$popover, this.$editor, this.$textarea, h(
+        'div',
+        { class: 'row' },
+        this.$add, this.$attach, slot('composer-actions'), this.$hint, h('div', { class: 'spacer' }),
+        this.$optionsButton, this.$modelButton, this.$stop, this.$send,
+      )),
       this.$fileInput,
     );
 
@@ -753,13 +1140,28 @@ export class AgentPanelElement extends Base {
     this.$close.title = labels.close;
     this.$emptyTitle.textContent = this.getAttribute('empty-title') || '';
     this.$emptyText.textContent = this.getAttribute('empty-text') || '';
-    this.$input.placeholder = this.getAttribute('placeholder') || '';
-    this.$input.setAttribute('aria-label', this.getAttribute('placeholder') || labels.send);
-    this.$input.disabled = this.disabled;
+    const plain = this._plain();
+    const placeholder = this.getAttribute('placeholder') || '';
+    this.$textarea.hidden = !plain;
+    this.$editor.hidden = plain;
+    this.$textarea.placeholder = placeholder;
+    this.$textarea.disabled = this.disabled;
+    this.$editor.dataset.placeholder = placeholder;
+    this.$editor.setAttribute('aria-placeholder', placeholder);
+    this.$editor.contentEditable = this.disabled ? 'false' : 'true';
+    this.$editor.setAttribute('aria-disabled', String(this.disabled));
+    [this.$textarea, this.$editor].forEach((el) => el.setAttribute('aria-label', placeholder || labels.send));
     this.$hint.textContent = this.getAttribute('hint') || '';
     this.$fileInput.accept = this.limits.accept;
     this.$attach.setAttribute('aria-label', labels.attach);
     this.$attach.title = labels.attachHint;
+    this.$add.setAttribute('aria-label', labels.add);
+    this.$add.title = labels.add;
+    this.$optionsButton.setAttribute('aria-label', labels.options);
+    this.$optionsButton.title = labels.options;
+    this.$modelLabel.textContent = this._modelName();
+    this.$modelButton.setAttribute('aria-label', `${labels.model}: ${this._modelName()}`);
+    this.$modelButton.title = labels.model;
     this.$send.setAttribute('aria-label', labels.send);
     this.$send.title = labels.send;
     this.$stop.setAttribute('aria-label', labels.stop);
@@ -769,7 +1171,8 @@ export class AgentPanelElement extends Base {
     this.$dropLabel.textContent = labels.drop;
 
     this.$empty.hidden = this._entries.length > 0;
-    this.$suggestions.replaceChildren(...this._suggestions.map((text) => h(
+    const suggestionsKey = dataKey(this._suggestions);
+    if (suggestionsKey !== this._suggestionsKey) this.$suggestions.replaceChildren(...this._suggestions.map((text) => h(
       'button',
       {
         type: 'button', class: 'suggestion', part: 'suggestion', onClick: () => this.submit(text),
@@ -777,19 +1180,26 @@ export class AgentPanelElement extends Base {
       h('span', null, text),
       icon('send', 14),
     )));
+    this._suggestionsKey = suggestionsKey;
     this.$working.hidden = !this.running;
     this.$errorText.textContent = this.error;
     this.$error.hidden = !this.error;
     this.$attachError.textContent = this._attachError;
     this.$attachError.hidden = !this._attachError;
     this.$mention.hidden = !this._mention;
-    this.$refChips.replaceChildren(...this._references.map((ref) => this.renderReference(ref, { removable: true })));
-    this._renderChips();
+    // Chips are rebuilt only when what they show changes, so focus on them survives redraws.
+    const chipsKey = dataKey([this._references, this._attachments.map((a) => [a.id, a.name, a.previewUrl, a.state])]);
+    if (chipsKey !== this._chipsKey) {
+      this._chipsKey = chipsKey;
+      this.$refChips.replaceChildren(...this._references.map((ref) => this.renderReference(ref, { removable: true })));
+      this._renderChips();
+    }
     if (this._entriesDirty) {
       this._entriesDirty = false;
       this._renderEntries();
     }
     this._renderControls();
+    this._renderMenu();
     this.scrollToBottom();
   }
 
@@ -797,11 +1207,379 @@ export class AgentPanelElement extends Base {
     const assigned = (s) => s.assignedNodes({ flatten: true }).some((n) => n.nodeType === 1 || n.textContent.trim());
     this.$subhead.hidden = !assigned(this.$subhead.querySelector('slot'));
     this.$chips.hidden = !this._attachments.length && !this._references.length && !assigned(this.$chipSlot);
-    this.$attach.hidden = this.hasAttribute('no-attachments');
+    const addItems = this._addItems();
+    const plainAttach = addItems === null || (addItems.length === 1 && addItems[0].id === 'attach');
+    this.$attach.hidden = this.hasAttribute('no-attachments') || !plainAttach;
     this.$attach.disabled = this.disabled;
+    this.$add.hidden = plainAttach || !addItems.length;
+    this.$add.disabled = this.disabled;
+    this.$optionsButton.hidden = !this._options.length;
+    this.$modelButton.hidden = !this._models.length;
     this.$stop.hidden = !this.running;
     this.$send.hidden = this.running;
-    this.$send.disabled = this.disabled || !(this.draft.trim() || this._canSendEmpty());
+    const draft = this.draft;
+    this.$send.disabled = this.disabled || !(draft.trim() || this._canSendEmpty());
+    this.$editor.classList.toggle('is-empty', !this.$editor.textContent);
+  }
+
+  // ---- Composer menus ("+", options, model) -------------------------------------------
+
+  // The "+" menu's items, resolved: null when `no-add-menu` is set (plain paperclip).
+  _addItems() {
+    if (this.hasAttribute('no-add-menu')) return null;
+    const labels = this._labels;
+    const canAttach = this._canAttach();
+    const builtins = {
+      attach: () => canAttach && { id: 'attach', label: labels.attachFiles, icon: 'paperclip' },
+      paste: () => canAttach && matchesAccept(new File([], 'pasted.txt', { type: 'text/plain' }), this.limits.accept)
+        && { id: 'paste', label: labels.pasteText, icon: 'paste' },
+      context: () => this._trigger() && { id: 'context', label: labels.addContext, icon: 'at' },
+      link: () => !this.disabled && { id: 'link', label: labels.attachLink, icon: 'link' },
+    };
+    return this.addMenu.map((item) => {
+      if (typeof item === 'string') return builtins[item]?.() || null;
+      return item && item.id != null && item.label != null ? { ...item, id: String(item.id), label: String(item.label) } : null;
+    }).filter(Boolean);
+  }
+
+  _modelName() {
+    if (!this._model) {
+      const fallback = this.getAttribute('default-model');
+      return fallback ? this._labels.defaultModelNamed(fallback) : this._labels.defaultModel;
+    }
+    const found = this._models.find((m) => m.id === this._model);
+    return found?.label || this._model;
+  }
+
+  _trigger$(name) {
+    return { add: this.$add, options: this.$optionsButton, model: this.$modelButton }[name];
+  }
+
+  _toggleMenu(name) {
+    if (this._menu?.name === name) this._closeMenu();
+    else this._openMenu(name);
+  }
+
+  _openMenu(name, view = 'list') {
+    if (this._menu && this._menu.name !== name) this._closeMenu({ focus: false });
+    this.closeMention();
+    this._menu = { name, view, query: '' };
+    this._menuKey = null;
+    this._menuView = null;
+    [this.$add, this.$optionsButton, this.$modelButton].forEach((b) => b.setAttribute('aria-expanded', String(b === this._trigger$(name))));
+    if (!this._onOutside) {
+      // Clicks anywhere else close the menu; composedPath sees through shadow roots.
+      this._onOutside = (e) => {
+        const path = e.composedPath();
+        if (!path.includes(this.$popover) && !path.includes(this._trigger$(this._menu?.name))) this._closeMenu({ focus: false });
+      };
+      document.addEventListener('pointerdown', this._onOutside, true);
+    }
+    this._renderMenu();
+    this._focusMenu();
+  }
+
+  _closeMenu({ focus = true } = {}) {
+    if (!this._menu) return;
+    const trigger = this._trigger$(this._menu.name);
+    const hadFocus = this.$popover.contains(this.shadowRoot.activeElement);
+    this._menu = null;
+    this.$popover.hidden = true;
+    this.$popover.replaceChildren();
+    [this.$add, this.$optionsButton, this.$modelButton].forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    if (this._onOutside) document.removeEventListener('pointerdown', this._onOutside, true);
+    this._onOutside = null;
+    if (focus && hadFocus) trigger.focus();
+  }
+
+  _menuItems() {
+    return Array.from(this.$popover.querySelectorAll('[role^="menuitem"]:not(:disabled)'));
+  }
+
+  _focusMenu() {
+    const first = this.$popover.querySelector('[data-autofocus]') || this.$popover.querySelector('[aria-checked="true"]:not(:disabled)') || this._menuItems()[0];
+    first?.focus();
+  }
+
+  _onMenuKeydown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (this._menu?.view !== 'list') this._setMenuView('list');
+      else this._closeMenu();
+      return;
+    }
+    if (this._menu?.view !== 'list') return; // Forms keep their arrow keys.
+    const items = this._menuItems();
+    const at = items.indexOf(this.shadowRoot.activeElement);
+    const go = (i) => {
+      e.preventDefault();
+      items[(i + items.length) % items.length]?.focus();
+    };
+    if (e.key === 'ArrowDown') go(at + 1);
+    else if (e.key === 'ArrowUp') go(at < 0 ? -1 : at - 1);
+    else if (e.key === 'Home' && at >= 0) go(0);
+    else if (e.key === 'End' && at >= 0) go(-1);
+  }
+
+  _setMenuView(view) {
+    if (!this._menu) return;
+    this._menu.view = view;
+    this._renderMenu();
+    this._focusMenu();
+  }
+
+  // Redraws the open menu only when what it shows changed, so focus inside survives.
+  _renderMenu() {
+    const menu = this._menu;
+    if (!menu) return;
+    if (menu.name === 'model' && !this._models.length) return this._closeMenu({ focus: false });
+    if (menu.name === 'options' && !this._options.length) return this._closeMenu({ focus: false });
+    // The "+" menu went away (no-add-menu, no items left) or the panel was disabled.
+    if ((menu.name === 'add' && this.$add.hidden) || this.disabled) return this._closeMenu({ focus: false });
+    const align = menu.name === 'add' ? 'start' : 'end';
+    this.$popover.className = `menu-pop menu-pop--${align} menu-pop--${menu.name}`;
+    this.$popover.hidden = false;
+    // Forms (paste text, attach link) and the search field are built once per view, so
+    // typing (and IME composition) is never interrupted by a redraw.
+    const view = `${menu.name}:${menu.view}:${menu.name === 'model' && this._models.length > 7}`;
+    if (this._menuView !== view) {
+      this._menuView = view;
+      this._menuKey = null;
+      this.$menuBody = h('div', { class: 'menu-body', role: 'menu', 'aria-label': this._menuLabel() });
+      const head = this._menuHead();
+      this.$popover.replaceChildren(...(head ? [head] : []), ...(menu.view === 'list' ? [this.$menuBody] : []));
+    }
+    if (menu.view !== 'list') return;
+    const key = dataKey([menu.name, menu.query, this._models, this._model, this._options, this.optionValues,
+      this.getAttribute('default-model'), this.hasAttribute('no-default-model'), this._addItems()]);
+    if (key === this._menuKey && this._labels === this._menuLabels) return;
+    this._menuKey = key;
+    this._menuLabels = this._labels;
+    const focused = this.shadowRoot.activeElement?.dataset?.menuKey;
+    this.$menuBody.replaceChildren(...this._menuBodyContent());
+    if (focused) this.$menuBody.querySelector(`[data-menu-key="${CSS.escape(focused)}"]`)?.focus();
+  }
+
+  _menuLabel() {
+    return { add: this._labels.add, options: this._labels.options, model: this._labels.model }[this._menu.name];
+  }
+
+  _menuHead() {
+    const { name, view } = this._menu;
+    const labels = this._labels;
+    const stopEnter = (fn) => (e) => {
+      // The composer is a <form>: Enter in a field would otherwise send the message.
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !(e.target.tagName === 'TEXTAREA' && !(e.metaKey || e.ctrlKey))) {
+        e.preventDefault();
+        fn();
+      }
+    };
+    if (name === 'model' && this._models.length > 7) {
+      const search = h('input', {
+        class: 'menu-search', type: 'search', placeholder: labels.searchModels, 'aria-label': labels.searchModels, 'data-autofocus': true,
+        onInput: (e) => {
+          this._menu.query = e.target.value;
+          this._renderMenu();
+        },
+        onKeydown: stopEnter(() => this._menuItems()[0]?.click()),
+      });
+      return h('div', { class: 'menu-searchbar' }, icon('search', 16), search);
+    }
+    if (name === 'add' && view === 'paste') {
+      const fileName = h('input', { class: 'menu-field', placeholder: 'pasted-text.txt', 'aria-label': labels.pasteName });
+      const text = h('textarea', { class: 'menu-field menu-text', rows: 8, 'aria-label': labels.pasteContent, placeholder: labels.pasteContent, 'data-autofocus': true });
+      const add = () => {
+        if (!text.value) return text.focus();
+        let name = fileName.value.trim() || 'pasted-text.txt';
+        if (!extensionOf(name)) name += '.txt';
+        const type = TEXT_TYPES[extensionOf(name)] || 'text/plain';
+        this._closeMenu();
+        this.addFiles([new File([text.value], name, { type })]);
+        this.focus();
+      };
+      fileName.addEventListener('keydown', stopEnter(add));
+      text.addEventListener('keydown', stopEnter(add));
+      return this._menuForm(labels.pasteText, [fileName, text], labels.addFile, add);
+    }
+    if (name === 'add' && view === 'link') {
+      const url = h('input', { class: 'menu-field', type: 'url', placeholder: 'https://', 'aria-label': labels.linkUrl, 'data-autofocus': true });
+      const problem = h('div', { class: 'menu-problem', role: 'alert', hidden: true });
+      const add = () => {
+        const href = assetUrl(url.value.trim());
+        if (!href) {
+          problem.textContent = labels.invalidLink;
+          problem.hidden = false;
+          return url.focus();
+        }
+        const path = new URL(href).pathname.split('/').filter(Boolean).pop();
+        let label = new URL(href).host;
+        try {
+          if (path) label = decodeURIComponent(path);
+        } catch {
+          label = path; // Malformed escapes: keep the segment as written.
+        }
+        const mimeType = IMAGE_TYPES[extensionOf(path)];
+        this._closeMenu();
+        this.addReference({ type: 'asset', id: href, url: href, label, name: label, ...(mimeType ? { mimeType } : {}) });
+      };
+      url.addEventListener('keydown', stopEnter(add));
+      return this._menuForm(labels.attachLink, [url, problem], labels.attachLink, add);
+    }
+    return null;
+  }
+
+  _menuForm(title, fields, submitLabel, submit) {
+    return h(
+      'div',
+      { class: 'menu-form', role: 'dialog', 'aria-label': title },
+      h('div', { class: 'menu-title' }, title),
+      fields,
+      h(
+        'div',
+        { class: 'menu-actions' },
+        h('button', { type: 'button', class: 'btn btn--sm', onClick: () => this._setMenuView('list') }, this._labels.cancel),
+        h('button', { type: 'button', class: 'btn btn--sm btn--primary', onClick: submit }, submitLabel),
+      ),
+    );
+  }
+
+  _menuBodyContent() {
+    const { name } = this._menu;
+    if (name === 'add') return this._addMenuContent();
+    if (name === 'model') return this._modelMenuContent();
+    return this._optionsMenuContent();
+  }
+
+  _menuItem({ key, label, description, iconName, role = 'menuitem', checked, disabled, onClick }) {
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: ['menu-item', checked && 'menu-item--sel'],
+        role,
+        'aria-checked': role === 'menuitem' ? null : String(Boolean(checked)),
+        'data-menu-key': key,
+        disabled: Boolean(disabled),
+        onClick,
+      },
+      iconName ? icon(iconName, 16, 'menu-icon') : null,
+      h('span', { class: 'menu-text-col' }, h('span', { class: 'menu-label' }, label), description ? h('span', { class: 'menu-desc' }, description) : null),
+      role === 'menuitem' ? null : icon('check', 16, 'menu-check'),
+    );
+  }
+
+  // Items with a `group` are listed under a heading, in the order groups first appear.
+  _grouped(items, render) {
+    const order = [];
+    const groups = new Map();
+    items.forEach((item) => {
+      const group = item.group == null ? '' : String(item.group);
+      if (!groups.has(group)) {
+        groups.set(group, []);
+        order.push(group);
+      }
+      groups.get(group).push(item);
+    });
+    return order.flatMap((group) => [group ? h('div', { class: 'menu-group', role: 'presentation' }, group) : null, ...groups.get(group).map(render)]).filter(Boolean);
+  }
+
+  _addMenuContent() {
+    return this._grouped(this._addItems(), (item) => this._menuItem({
+      key: `add:${item.id}`,
+      label: item.label,
+      description: item.description,
+      iconName: item.icon,
+      disabled: item.disabled,
+      onClick: () => this._pickAddItem(item),
+    }));
+  }
+
+  _pickAddItem(item) {
+    const accepted = this._emit('agent-menu-select', { id: item.id, item }, { cancelable: true });
+    if (accepted && item.id === 'paste' && !item.reference) return this._setMenuView('paste');
+    if (accepted && item.id === 'link' && !item.reference) return this._setMenuView('link');
+    this._closeMenu({ focus: !accepted });
+    if (!accepted) return;
+    if (item.reference) this.addReference(item.reference);
+    else if (item.id === 'attach') this.$fileInput.click();
+    else if (item.id === 'context') this.openMention();
+  }
+
+  _modelMenuContent() {
+    const labels = this._labels;
+    const terms = this._menu.query.toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = (text) => terms.every((t) => text.toLowerCase().includes(t));
+    const shown = this._models.filter((m) => matches(`${m.id} ${m.label || ''} ${m.description || ''} ${m.group || ''}`));
+    const fallback = this.getAttribute('default-model') || '';
+    const items = [];
+    if (!this.hasAttribute('no-default-model') && matches(`${labels.defaultModel} ${fallback}`)) {
+      items.push(this._menuItem({
+        key: 'model:', label: labels.defaultModel, description: fallback, role: 'menuitemradio', checked: !this._model, onClick: () => this._pickModel(''),
+      }));
+    }
+    items.push(...this._grouped(shown, (m) => this._menuItem({
+      key: `model:${m.id}`,
+      label: m.label || m.id,
+      description: m.description || (m.label && m.label !== m.id ? m.id : ''),
+      role: 'menuitemradio',
+      checked: m.id === this._model,
+      disabled: m.disabled,
+      onClick: () => this._pickModel(m.id),
+    })));
+    return items.length ? items : [h('p', { class: 'menu-empty' }, labels.noModels)];
+  }
+
+  _pickModel(id) {
+    const previous = this._model;
+    this._closeMenu();
+    if (id === previous) return;
+    if (this._emit('agent-model-change', { model: id, previous }, { cancelable: true })) this.model = id;
+  }
+
+  _optionsMenuContent() {
+    const values = this.optionValues;
+    const out = [];
+    this._options.forEach((option) => {
+      if (option.type === 'toggle') {
+        out.push(this._menuItem({
+          key: `option:${option.id}`,
+          label: option.label,
+          description: option.description,
+          role: 'menuitemcheckbox',
+          checked: Boolean(values[option.id]),
+          disabled: option.disabled,
+          onClick: () => this._setOption(option.id, !values[option.id]),
+        }));
+        return;
+      }
+      out.push(h('div', { class: 'menu-group', role: 'presentation' }, option.label));
+      option.choices.forEach((choice, i) => out.push(this._menuItem({
+        key: `option:${option.id}:${i}`,
+        label: choice.label,
+        role: 'menuitemradio',
+        checked: Object.is(values[option.id], choice.value),
+        disabled: option.disabled,
+        onClick: () => this._setOption(option.id, choice.value),
+      })));
+    });
+    const changed = this._options.some((o) => !Object.is(values[o.id], optionDefault(o)));
+    if (changed) {
+      out.push(h('div', { class: 'menu-sep', role: 'separator' }));
+      out.push(this._menuItem({ key: 'option-reset', label: this._labels.resetOptions, onClick: () => this._setOption(null) }));
+    }
+    return out;
+  }
+
+  // id null resets every option to its default.
+  _setOption(id, value) {
+    const next = id === null ? {} : { ...this._optionValues, [id]: value };
+    const values = Object.fromEntries(this._options.map((o) => [o.id, o.id in next ? next[o.id] : optionDefault(o)]));
+    if (!this._emit('agent-option-change', { id, value: id === null ? null : value, values }, { cancelable: true })) return;
+    this._optionValues = next;
+    this._renderMenu();
+    if (id === null) this._focusMenu();
+    this._schedule();
   }
 
   _renderChips() {
@@ -858,7 +1636,11 @@ export class AgentPanelElement extends Base {
   }
 
   _entryNode(entry, id, old) {
-    const node = this.renderEntry(entry) || h('div', { class: 'entry-slot' }, h('slot', { name: `entry-${id}` }));
+    const rendered = this.renderEntry(entry);
+    let node = rendered;
+    if (!rendered) node = h('div', { class: 'entry-slot' }, h('slot', { name: `entry-${id}` }));
+    // Text nodes and fragments get a wrapper, so every row can carry data-entry-id.
+    else if (rendered.nodeType !== 1) node = h('div', { class: 'entry' }, rendered);
     node.dataset.entryId = id;
     if (old) {
       const open = new Set([old, ...old.querySelectorAll('details')].filter((d) => d.open && d.dataset?.key).map((d) => d.dataset.key));

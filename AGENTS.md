@@ -38,7 +38,8 @@ the code and this file disagree, fix one of them in the same change.
    `AgentPageElement` does with `this._page`. Subclasses must not declare class fields
    that `layout` or `_render` read.
 6. Keep `attachments.mjs` free of DOM access beyond the `File` and `DataTransfer` objects
-   it's given, so it stays testable under `node --test`.
+   it's given, and `richtext.mjs` free of DOM access beyond the node-like objects it's
+   given, so both stay testable under `node --test`.
 7. Public names (attributes, properties, events, slots, parts, CSS tokens, `labels` keys)
    are API. Renaming one is a breaking change: update `README.md`, this file and the
    tests together, and release it under a new minor version while the version is `0.x`
@@ -52,12 +53,15 @@ the code and this file disagree, fix one of them in the same change.
 | `agent-panel.js` | `AgentPanelElement` class, `h()`, `icon()`, `referenceKey()`; re-exports `DEFAULT_LIMITS`, `formatBytes`, `readAsBase64`. Exported as `agent-panel/element` |
 | `agent-page.js` | `AgentPageElement` class (extends `AgentPanelElement`) and its CSS. Exported as `agent-panel/page-element` |
 | `attachments.mjs` | Pure helpers: `DEFAULT_LIMITS`, `extensionFor`, `filesFromDataTransfer`, `pastedFiles`, `nameFor`, `matchesAccept`, `formatBytes`, `attachmentProblem`, `readAsBase64`. Exported as `agent-panel/attachments` |
+| `richtext.mjs` | Pure helpers for the rich-text composer: `runsFromNode`, `runsFromText`, `runsToMarkdown`, `runsToHTML`, `inlineMarkdownToHTML`, `escapeHTML` |
 | `styles.js` | `STYLES`: the base shadow CSS and the token defaults |
-| `icons.js` | `ICONS`: MDI SVG paths (Apache-2.0), keyed `paperclip, send, stop, close, chevron, check, alert, file, image, upload, at, link, history, plus, delete` |
+| `icons.js` | `ICONS`: MDI SVG paths (Apache-2.0), keyed `paperclip, send, stop, close, chevron, check, alert, file, image, upload, at, link, history, plus, delete, tune, paste, chevron-down, search` |
 | `index.js` | Defines `<agent-panel>` and re-exports everything from `agent-panel.js` and `attachments.mjs`. This is the package's main entry, `agent-panel` |
 | `page.js` | Defines `<agent-page>` and re-exports `agent-page.js`, the panel's `AgentPanelElement`, `h`, `icon` and `referenceKey`, and `attachments.mjs`. Exported as `agent-panel/page` |
 | `attachments.d.mts`, `element.d.ts`, `page-element.d.ts`, `index.d.ts`, `page.d.ts` | Type declarations matching the entry points |
 | `test/attachments.test.mjs` | Node tests for `attachments.mjs` (`npm test`) |
+| `test/richtext.test.mjs` | Node tests for `richtext.mjs` (`npm test`) |
+| `test/browser.check.mjs` | Chromium checks for both tags (`npm run test:browser`, with `PLAYWRIGHT_MODULE` pointing at an external Playwright) |
 | `package.json` | `type: module`, the `exports` map, no dependencies. Apps install it with `npm install github:compdani/agent-panel#vX.Y.Z` |
 
 ## 4. Type declarations
@@ -87,12 +91,23 @@ interface Attachment {
 interface Limits { accept: string; maxFileSize: number; maxTotalSize: number; maxFiles: number }
 
 interface Labels {
-  attach: string; attachHint: string; close: string; dismiss: string; drop: string;
-  remove: string; send: string; stop: string; working: string; usedTools(n: number): string;
+  add: string; addContext: string; addFile: string; attach: string; attachFiles: string;
+  attachHint: string; attachLink: string; cancel: string; close: string; defaultModel: string;
+  defaultModelNamed(name: string): string; dismiss: string; drop: string; invalidLink: string;
+  linkUrl: string; model: string; noModels: string; options: string; pasteContent: string;
+  pasteName: string; pasteText: string; remove: string; resetOptions: string;
+  searchModels: string; send: string; stop: string; working: string; usedTools(n: number): string;
 }
 
+interface ModelChoice { id: string; label?: string; group?: string; description?: string; disabled?: boolean }
+interface AgentOption { id: string; label?: string; choices?: Array<unknown | { value: unknown; label?: string }>;
+                        default?: unknown; description?: string; disabled?: boolean }
+type BuiltInAddItem = 'attach' | 'paste' | 'context' | 'link';
+interface AddMenuItem { id: string; label: string; icon?: string; group?: string; description?: string;
+                        reference?: Reference; disabled?: boolean }
+
 interface PageLabels extends Labels {
-  cancel: string; conversations: string; delete: string; deleteConversation(title: string): string;
+  conversations: string; delete: string; deleteConversation(title: string): string;
   inContext: string; newChat: string; noConversations: string; rename: string; titleLabel: string;
   untitled: string;
 }
@@ -118,6 +133,11 @@ declare class AgentPanelElement extends HTMLElement {
   readonly limits: Limits;
   error: string;                  // reflects the `error` attribute ('' removes it)
   running: boolean; disabled: boolean; closable: boolean; // reflect boolean attributes
+  models: ModelChoice[];          // setter takes strings too; [] hides the model menu
+  model: string;                  // '' = default
+  options: AgentOption[];         // [] hides the options menu
+  optionValues: Record<string, unknown>; // getter fills in defaults
+  addMenu: Array<BuiltInAddItem | AddMenuItem>; // default ['attach', 'paste', 'context']; null restores it
 
   submit(text?: string): boolean;
   clearComposer(opts?: { draft?: boolean; attachments?: boolean; references?: boolean }): void;
@@ -172,13 +192,15 @@ declare function icon(nameOrPath: keyof typeof ICONS | string, size?: number, cl
 | `running`, `disabled`, `closable`, `error`, `no-attachments`, `accept`, `allow-empty-text` | yes | each redraw, and when used |
 | `max-file-size`, `max-total-size`, `max-files` | no | `addFiles()`, through `limits` |
 | `sticky-attachments` | no | `submit()` |
-| `mention-trigger` | no | each keystroke (`input`) |
+| `plain-text` | yes (the draft moves between the editor and the textarea) | each redraw, and `draft` |
+| `mention-trigger` | yes (it decides the "+" menu's Add context item) | each keystroke (`input`) |
+| `no-add-menu`, `default-model`, `no-default-model` | yes | each redraw (§6 Menus) |
 | Page: `active`, `renamable`, `no-sidebar` | yes | each redraw (`no-sidebar` is CSS only) |
 | `theme="dark"` | no (CSS only) | — |
 
 The defaults (`DEFAULT_LIMITS`) are: `accept: 'image/*,application/pdf,text/*,.md,.txt,.json,.xml,.doc,.docx,.dot,.odt,.rtf,.ppt,.pptx,.xls,.xlsx,.csv'`,
 `maxFileSize: 6 MiB`, `maxTotalSize: 20 MiB`, `maxFiles: 12`. A limit attribute that is
-negative or not a number falls back to its default.
+negative, blank or not a number falls back to its default.
 
 ## 6. Behaviour
 
@@ -192,14 +214,23 @@ negative or not a number falls back to its default.
   can't be serialized is redrawn on every pass. So: **pass plain data**. Behaviour that
   depends on things outside the entry (busy flags, for example) must be copied into the
   entry, or it won't show.
-- **D4.** On a redraw, `<details>` elements carrying a `data-key` keep their open state.
+- **D4.** On a redraw, `<details>` elements carrying a `data-key` keep their open state,
+  including the full redraw that `labels`, `markdown` and `defineEntry()` cause.
   The built-in tool groups use `tools:<entry.id>` and `tool:<key ?? id ?? index>`.
+- **D4a.** A renderer may return any `Node`. Non-elements (text nodes, fragments) are
+  wrapped in `<div class="entry">` so the row can carry `data-entry-id`.
+- **D4b.** Composer chips, suggestions and the page's context chips are rebuilt only
+  when their data changes, so focus on them survives unrelated redraws.
 - **D5.** The order in which `renderEntry` picks a renderer: instance renderers
   (`defineEntry`), then `text`, then `tools`, then `null` (meaning a slot). A subclass that
   overrides `renderEntry` runs before all of these, and should call `super.renderEntry`
   for types it doesn't handle.
-- **D6.** Each entry's root node gets `data-entry-id`. Text nodes get `data-role`. Tool
+- **D6.** Each entry's root node gets `data-entry-id`. Text nodes get `data-role` (on a user
+  turn, the bubble; on a user turn with chips and no text, the `.user-turn` wrapper). Tool
   groups get `data-status`, and each tool gets `data-tool-id`.
+- **D6a.** User bubbles render bold and italic from their markdown (`inlineMarkdownToHTML`:
+  everything else is escaped, newlines kept by `white-space: pre-wrap`). Assistant messages
+  still go through `renderMarkdown`.
 - **D7.** The empty state is visible exactly when `entries.length === 0`.
 - **D8.** Scroll following: the panel follows when the reader is within 80px of the
   bottom. A `ResizeObserver` on the transcript keeps it at the bottom while content
@@ -208,13 +239,15 @@ negative or not a number falls back to its default.
 
 ### Composer
 
-- **C1.** Enter (without Shift, and not during IME composition) calls `submit()`.
+- **C1.** Enter (without Shift, and not during IME composition: `isComposing` or
+  `keyCode 229`) calls `submit()`. Shift+Enter inserts a line break (`<br>` in the editor).
 - **C2.** `submit(text?)` does the following:
   1. It returns `false` if the trimmed text is empty (unless `text` was omitted,
      `allow-empty-text` is set and files or references exist), or the panel is `running` or
      `disabled`.
   2. It fires a cancelable `agent-submit` with
-     `{ text: trimmed, attachments: copy, references: copy, fromDraft: text === undefined }`.
+     `{ text: trimmed, attachments: copy, references: copy, fromDraft: text === undefined,
+     model, options: optionValues }`.
   3. If the event wasn't cancelled, it:
      - clears the draft (only when `text` was left out);
      - clears the attachments, unless `sticky-attachments` is set;
@@ -226,7 +259,44 @@ negative or not a number falls back to its default.
 - **C4.** While `running`, the textarea stays enabled, Stop is shown and Send is hidden.
   Send is disabled when the panel is `disabled`, or the draft is blank unless
   both `allow-empty-text` is set and at least one attachment or reference exists.
-- **C5.** The textarea grows to fit its content, up to `--agent-composer-max-height`.
+- **C5.** The composer grows to fit its content, up to `--agent-composer-max-height`.
+- **C6. Rich text (0.3.0).** The composer is a `contenteditable` editor
+  (`.input.input--rich`, `part="input"`, `role="textbox"`) unless `plain-text` is set, which
+  shows the old `<textarea>` (also `part="input"`). Only one is visible.
+  - Formatting is bold and italic only: Cmd/Ctrl+B and Cmd/Ctrl+I. Cmd/Ctrl+U is blocked
+    (markdown has no underline), and `beforeinput` refuses every other `format*` and list
+    or link input.
+  - `draft` reads the editor as markdown: `**bold**`, `*italic*`, `***both***`, with
+    markers kept off surrounding spaces and newlines for line breaks. Typed text is not
+    escaped, so a plain message is sent exactly as typed (and typed markdown still works).
+    Setting `draft` renders `**x**`, `__x__`, `*x*` and `_x_` (and `\*` as a literal) as
+    formatting; everything else is escaped text.
+  - Paste: files go to the attachment handling as before (A1) when they can be attached.
+    Otherwise the browser's own paste is always cancelled (so it never inserts an image or
+    raw HTML), and `text/html` is parsed with `DOMParser` (nothing runs or loads) and
+    reduced to text, line breaks, bold and italic (tags and inline `font-weight` /
+    `font-style`, so Google Docs' normal-weight `<b>` wrapper stays plain). Blocks become
+    lines, list items `- `, table cells tab-separated; scripts, styles, images and other
+    elements are dropped. When the HTML yields no text, or there is none, `text/plain` is
+    inserted. Insertion goes through `insertHTML` (so undo works), falling back to direct
+    insertion if that does nothing. Nothing is inserted while `disabled`.
+  - Drop: handled in `beforeinput` (`insertFromDrop`), reduced like a paste and inserted at
+    the event's target range (the drop point); files are left to the panel's drop handling.
+  - Selection: `shadowRoot.getSelection()` where it exists (Chromium), otherwise
+    `getComposedRanges` (Safari, Firefox), otherwise the document selection. Stale ranges
+    count as no selection; a caret between nodes is resolved to the text before it.
+  - Line breaks inside text nodes split runs, so `**a**\n**b**`, never markers across a
+    line. The serializer parses its own output back and, if two markers merged into one
+    delimiter run, retries with `__` / `_` and the other nesting order (then, for up to 10
+    markers, every per-marker choice). Every combination of three or four bold/italic
+    segments round-trips; formatting that changes on every letter inside one word may not
+    be expressible in CommonMark, and then the first form is kept. Bubbles and drafts render emphasis by CommonMark's rules (delimiter runs, the rule
+    of 3), so they match what markdown renderers and the model read; `*` works inside words
+    and `_` doesn't.
+  - Mentions (M1) match within the text node holding the caret; `addReference` cuts
+    `trigger + query` out of that node (M4).
+  - The placeholder is drawn with `::before` while the editor is empty (`.is-empty`).
+  - Switching `plain-text` on or off carries the draft across as markdown.
 
 ### Attachments
 
@@ -262,6 +332,10 @@ negative or not a number falls back to its default.
   size. Its messages are English and can't be changed through `labels`.
 - **A7.** Drag and drop reacts only when `dataTransfer.types` includes `Files`. The
   overlay counts `dragenter` and `dragleave` to avoid flickering.
+- **A7a.** `filesFromDataTransfer` keeps every entry of `files`, even distinct files with
+  equal name, size, type and date; `items` only adds files `files` doesn't already list.
+- **A7b.** Image `previewUrl`s are revoked when the element stays disconnected past a
+  microtask (a move keeps them) and recreated on reconnect, so `previewUrl` may change.
 - **A8.** `addFiles` checks each file with the `fileProblem(file, current)` hook. The
   default is `attachmentProblem(file, current, this.limits)`. Overrides should call
   `super.fileProblem` to keep the limits.
@@ -291,7 +365,7 @@ negative or not a number falls back to its default.
   - If it doesn't match and the mention came from typing, the mention closes.
   - A mention opened with `openMention()` (`from = -1`) is not closed by typing.
 - **M2.** `agent-mention { open, query }` fires only when the state actually changes (it
-  opens, closes, or the query changes).
+  opens, closes, or the query changes). A trigger that only moves fires nothing.
 - **M3.** While a mention is open, the keys ↑, ↓, Enter, Tab and Escape first fire a
   cancelable `agent-mention-key { key, event }`.
   - If a listener cancels it, the keydown is prevented and nothing else happens.
@@ -315,11 +389,19 @@ negative or not a number falls back to its default.
   - the history button appears;
   - `.page--drawer` opens the drawer and shows a scrim.
   The drawer closes on a scrim click, Escape, choosing a conversation, or New chat.
-- **P3.** Conversation rows are `<a href>` when `href` is set, otherwise `<button>`.
+  While closed it is `visibility: hidden` (out of the tab order and accessibility tree).
+  The history button carries `aria-expanded`. Opening focuses the active row (or New
+  chat); closing with focus inside returns it to the history button. On `hover: none`
+  screens the delete button is always shown.
+- **P3.** Conversation rows are `<a href>` when `href` is set and is relative or HTTP(S),
+  otherwise `<button>` (an unsafe `href` such as `javascript:` is dropped).
   - A plain left click fires a cancelable `agent-select-conversation { id, conversation }`.
   - If the event is cancelled, or there's no `href`, the click's default is prevented.
   - Clicks with a modifier key or a non-left button are left to the browser and fire no
-    event.
+    event, on link and button rows alike.
+  - The sidebar is rebuilt only when `conversations`, `active`, the confirming row, the
+    formatted dates or `labels` change, so focus survives transcript redraws. Entering
+    delete confirmation focuses the confirm button; cancelling focuses the row's link.
   - The row matching `active` gets `.conv--active` and `aria-current="page"`.
 - **P4.** Deleting is two steps: the delete button sets the row to `.conv--confirm`,
   confirming fires `agent-delete-conversation { id, conversation }`, and cancelling
@@ -336,11 +418,67 @@ negative or not a number falls back to its default.
 - **P7.** `formatDate(updated)` labels each row. The built-in format shows the time for
   today, `Mon D` within this year, and `Mon D, YYYY` otherwise.
 
+### Menus (0.3.0)
+
+The composer's bottom row has three built-in menus, styled like list_pocket's Vuetify
+menu cards. Each is optional and has defaults:
+
+- **MN1. "+" add menu** (`part="add-menu attach"`). On by default. `addMenu` lists its
+  items, default `['attach', 'paste', 'context']`. Built-in names:
+  - `attach`: opens the file picker. Needs attachments allowed.
+  - `paste`: a small form (file name and text) that adds a text `File` through
+    `addFiles` (type from the extension: csv, json, md, tsv, html, xml, otherwise
+    `text/plain`; `.txt` is added when the name has no extension). Needs attachments
+    allowed and `text/plain` accepted.
+  - `context`: `openMention()`. Needs `mention-trigger`.
+  - `link`: a URL form that adds `{ type: 'asset', id: url, url, label, name, mimeType? }`
+    (HTTP(S) only, via `assetUrl`). Not in the defaults: the backend must accept asset links.
+  - Host items `{ id, label, icon?, group?, description?, reference?, disabled? }`. Items
+    with a `group` are listed under that heading, groups in order of first appearance.
+    Picking one with `reference` calls `addReference(reference)`.
+  - Unavailable built-ins are dropped. When only `attach` is left, or `no-add-menu` is
+    set, the plain paperclip (`part="attach"`) shows instead. With no items, neither shows.
+  - Picking fires cancelable `agent-menu-select { id, item }`. Cancelling skips the
+    built-in action.
+- **MN2. Model menu** (`part="model-menu"`), hidden while `models` is empty.
+  - `models`: strings or `{ id, label?, group?, description?, disabled? }`; ids become strings.
+  - `model`: the chosen id; `''` is the default. The trigger shows the model's label, or
+    `labels.defaultModelNamed(default-model)` / `labels.defaultModel` for `''`.
+  - A "Default" entry comes first unless `no-default-model` is set.
+  - More than 7 models adds a search field (all terms must match id, label, description or
+    group; Enter picks the first match).
+  - Picking fires cancelable `agent-model-change { model, previous }`; unless cancelled,
+    `model` is set. The host persists it.
+- **MN3. Options menu** (`part="options-menu"`, a tune icon), hidden while `options` is
+  empty.
+  - `options`: `{ id, label?, choices?, default?, description?, disabled? }`. With
+    `choices` (values or `{ value, label }`) it's a pick-one list under a heading;
+    otherwise an on/off toggle.
+  - Defaults: toggles `false`, lists their first choice, unless `default` is given.
+  - `optionValues` returns every value with defaults filled in; setting it replaces the
+    chosen values. "Reset to defaults" appears once anything differs.
+  - Changing fires cancelable `agent-option-change { id, value, values }` (`id: null` for
+    reset). Toggling keeps the menu open.
+- **MN4.** `agent-submit` carries `model` and `options` (= `optionValues`).
+- **MN5. Behaviour.** One menu at a time, opened above the composer box (`part="menu"`):
+  the "+" menu aligned left, the others right. Opening closes any mention. ↑/↓/Home/End move
+  through items; Escape goes back from a form, then closes and refocuses the trigger;
+  Escape on an open menu's trigger closes it, and ↓/↑ on a closed trigger opens it;
+  clicking outside or moving focus out (including Shift+Tab back to the trigger) closes it.
+  Focus starts on the chosen item unless it's disabled. A menu closes when it stops being
+  available (`no-add-menu`, no items left, `disabled`). On the page, `.panel` is its own
+  stacking context (`z-index: 0`) so menus stay under the drawer and scrim, and opening the
+  drawer closes any menu. Triggers carry `aria-haspopup` and
+  `aria-expanded`; items are `menuitem`, `menuitemradio` or `menuitemcheckbox`. The open
+  menu is redrawn only when what it shows changes, so focus inside survives streaming,
+  and the search field and forms are never rebuilt while typing. Enter in the menu's
+  fields never submits the composer.
+
 ### Events (all `bubbles`, `composed`)
 
 | Event | Detail | Cancelable | Fired by |
 |---|---|---|---|
-| `agent-submit` | `{ text, attachments, references, fromDraft }` | yes | `submit()` |
+| `agent-submit` | `{ text, attachments, references, fromDraft, model, options }` | yes | `submit()` |
 | `agent-stop` | `null` | no | Stop button |
 | `agent-close` | `null` | no | Close button (the panel doesn't hide itself) |
 | `agent-action` | `{ action, ...detail }` | yes | `emitAction()` |
@@ -351,6 +489,9 @@ negative or not a number falls back to its default.
 | `agent-reference-open` | `{ reference }` | no | Click on a reference chip (R4) |
 | `agent-mention` | `{ open, query }` | no | Mention state changes (M2) |
 | `agent-mention-key` | `{ key, event }` | yes | Navigation keys while a mention is open (M3) |
+| `agent-menu-select` | `{ id, item }` | yes | A "+" menu item is picked (MN1) |
+| `agent-model-change` | `{ model, previous }` | yes | A model is picked (MN2) |
+| `agent-option-change` | `{ id, value, values }` | yes | An option is changed or reset (MN3) |
 | Page: `agent-select-conversation` | `{ id, conversation }` | yes | Left click on a row (P3) |
 | Page: `agent-new-conversation` | `null` | no | New chat button |
 | Page: `agent-delete-conversation` | `{ id, conversation }` | no | Confirmed delete (P4) |
@@ -370,16 +511,16 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 
 - **Parts**: `panel header heading close subheader transcript entries empty suggestion
   bubble message tools error composer attachments attachment reference mention input attach
-  hint send stop drop`. The page adds `page sidebar new-chat conversation-list conversation
+  hint send stop drop add-menu model-menu options-menu menu`. The page adds `page sidebar new-chat conversation-list conversation
   history title title-input context-bar`.
 - **Tokens** (defaults in `styles.js`): `--agent-primary --agent-on-primary
   --agent-surface --agent-surface-alt --agent-text --agent-muted --agent-border
   --agent-error --agent-success --agent-warning --agent-info --agent-font-size
   --agent-radius --agent-composer-max-height`. The page adds `--agent-sidebar-width`
   (250px) and `--agent-content-max-width` (860px).
-- **Reusable classes in the shadow root**: `btn btn--primary btn--tonal btn--icon chip
-  card badge alert tone-{success,error,warning,info,muted} spinner`. The page adds
-  `btn--sm btn--danger`.
+- **Reusable classes in the shadow root**: `btn btn--primary btn--tonal btn--icon btn--sm
+  chip card badge alert tone-{success,error,warning,info,muted} spinner`. The page adds
+  `btn--danger`.
 
 ## 7. Recipes
 
@@ -391,6 +532,8 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 | Add a header or composer control from a framework | Light-DOM child with `slot="header-actions"`, `"composer-actions"` and so on. Wrap framework components in a plain element that carries the `slot` attribute |
 | Keep files for follow-up turns | `sticky-attachments`. The host re-reads `panel.attachments` when retrying |
 | Block sending without losing input | `event.preventDefault()` in `agent-submit` |
+| Model picker, settings, "+" menu | Set `models` / `model`, `options`, `addMenu` (§6 Menus). Listen for `agent-model-change` and `agent-option-change` to persist; read `model` and `options` from `agent-submit` |
+| Keep the old paperclip | `no-add-menu` |
 | @-mentions of app objects | Set `mention-trigger="@"`. Render a picker into `slot="mention"`, search on `agent-mention`, handle keys on `agent-mention-key` (cancel the event when used), and call `addReference()` on pick (§6 Mentions) |
 | Attach app objects without typing | A button in `composer-actions` that calls `openMention()`, or `addReference()` directly |
 | Pre-attach something, e.g. from a URL | Set `el.references = [...]` after mount |
@@ -411,7 +554,8 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
   module that defines your subclass) before the host first draws, or arrays arrive as `"[object
   Object]"` attributes. The panel replays properties set before it was defined
   (`connectedCallback` upgrades `entries`, `suggestions`, `markdown`, `labels`, `draft`,
-  `references`, `error`, `running`, `disabled`, `closable`; the page also `conversations`,
+  `references`, `error`, `running`, `disabled`, `closable`, `models`, `model`, `options`,
+  `optionValues`, `addMenu`; the page also `conversations`,
   `active`, `renamable`, `contextReferences`, `formatDate`), but attributes already set
   can't be turned back into data.
 - **Vue.**
@@ -429,6 +573,10 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
     hyphenated `:context-references` becomes a string attribute.
   - A Vue component placed in the `mention` slot must sit inside a native wrapper element
     (`<div slot="mention"><my-picker …/></div>`).
+- **Typing in tests (0.3.0).** The composer is a `contenteditable` `div`, not a
+  `textarea`. Select it as `[part=input]` or `.input--rich`: Cypress `.type()` and
+  Playwright `fill()` / `type()` work on it; read the text with `panel.draft` rather than
+  `.value`. Set `plain-text` to keep the textarea (and `textarea` selectors).
 - **Shadow DOM in tests.** In Cypress, use `{ includeShadowDom: true }`; in Playwright,
   CSS selectors already reach into open shadow roots. Shadow content is
   found by class (`.message`, `.bubble`, `.chip`, `.scroll`, `.panel`, `.attach-error`,
@@ -453,7 +601,9 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 
 ## 9. Checking and releasing a change
 
-- **Tests.** `npm test` runs the Node tests in `test/`. It must pass.
+- **Tests.** `npm test` runs the Node tests in `test/`. It must pass. `npm run
+  test:browser` runs the browser checks in Chromium; `BROWSER=webkit` (and `firefox`) runs
+  them in another engine. Run Chromium and WebKit for any DOM change.
 - **Browser.** Rendering, paste, drop and events need a real browser. Install the change
   into an app that uses the panel (`npm install /path/to/agent-panel`, or push a branch
   and install `github:compdani/agent-panel#<branch>`), then run that app's browser tests.
@@ -491,3 +641,27 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
   content, animation, limits and model support. Host storage, API calls, credentials,
   failure recovery and persistence remain host responsibilities. Never store blob URLs.
 - `test/openai.test.mjs` covers document acceptance, conversion, uploads and failures.
+
+## 0.2.3 fixes
+
+- Page: unsafe conversation `href`s are dropped (P3); modifier clicks never select (P3);
+  the closed drawer is hidden from assistive tech with `aria-expanded` and focus handling
+  (P2); Delete is visible on touch screens; sidebar and context chips keep their nodes
+  across redraws (P3, D4b); `conversations` and `contextReferences` return copies.
+- Panel: D4, D4a, D4b, A7a, A7b, C1 and M2 as written above; blank limit attributes use
+  the defaults; a user turn without text draws no empty bubble.
+- OpenAI: `assetContent` sends `assetUrl()`'s normalized URL; `assetUrl` refuses URLs with
+  credentials; an explicit `mimeType` wins over the extension; `prepareSubmission` always
+  keeps `type: 'asset'` after merging upload results.
+
+## 0.3.0 composer menus
+
+- New built-in "+", model and options menus in the composer's bottom row (§6 Menus),
+  modelled on what list_pocket (model picker, Context, Paste data) and Static Dealmakers
+  (model select, settings menu, "+" context menu) built in their hosts.
+- Minor version: the "+" menu replaces the paperclip by default. `no-add-menu` restores
+  it. Hosts' `::part(attach)` styles still reach the "+" button.
+- `btn--sm` moved from the page to the base.
+- The composer is a rich-text editor by default (C6): bold and italic, sent as markdown,
+  rich paste reduced to bold and italic. `plain-text` keeps the textarea. User bubbles
+  render bold and italic (D6a).
