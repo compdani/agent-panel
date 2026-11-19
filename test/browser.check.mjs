@@ -585,6 +585,53 @@ try {
         assert(!root.querySelector('[part=heading]').hidden && root.querySelector('[part=switcher-new]').hidden, 'heading returns, New chat hides');
         footer.remove();
       }
+      {
+        // The context ring (contextUsage): hidden below the threshold, a card with Compact.
+        const root = panel.shadowRoot;
+        const ctx = root.querySelector('[part=context-usage]');
+        panel.running = false;
+        panel.contextUsage = { used: 10000, window: 100000 };
+        await tick();
+        assert(ctx && ctx.hidden, 'context ring hidden below the threshold');
+        panel.contextUsage = { used: 72000, window: 100000, estimated: true, summarizedAt: Date.now() };
+        await tick();
+        assert(!ctx.hidden && ctx.dataset.level === 'normal', 'context ring shown at 72%');
+        const button = root.querySelector('[part=context-usage-button]');
+        assert(button.getAttribute('aria-label').includes('72% of context used'), 'context ring label');
+        button.click();
+        await tick();
+        const card = root.querySelector('[part=context-usage-card]');
+        assert(!card.hidden && card.textContent.includes('72k of 100k tokens (estimated)'), 'context card numbers');
+        assert(card.textContent.includes('Earlier messages summarized'), 'context card shows the summary time');
+        let compacted = 0;
+        panel.addEventListener('agent-compact', () => { compacted += 1; });
+        root.querySelector('[part=context-compact]').click();
+        assert(compacted === 1, 'Compact fires agent-compact');
+        panel.contextUsage = { used: 72000, window: 100000, compacting: true };
+        await tick();
+        assert(root.querySelector('[part=context-compact]').disabled && ctx.classList.contains('ctx--busy'), 'compacting disables Compact');
+        // A compaction that drops below the threshold keeps the ring while its card is open.
+        panel.contextUsage = { used: 20000, window: 100000 };
+        await tick();
+        assert(!ctx.hidden && card.textContent.includes('20% of context used'), 'open card shows the result');
+        card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await tick();
+        assert(card.hidden && ctx.hidden, 'Escape closes the card and the ring hides');
+        panel.contextUsage = { used: 97000, window: 100000, canCompact: false };
+        await tick();
+        assert(ctx.dataset.level === 'critical', 'critical level at 97%');
+        panel.openContextUsage();
+        await tick();
+        assert(root.querySelector('[part=context-compact]').hidden, 'canCompact false hides Compact');
+        panel.closeContextUsage();
+        panel.setAttribute('context-threshold', '0.99');
+        await tick();
+        assert(ctx.hidden, 'context-threshold raises the bar');
+        panel.contextUsage = null;
+        panel.removeAttribute('context-threshold');
+        await tick();
+        assert(ctx.hidden, 'null contextUsage hides the ring');
+      }
     }, tag);
     console.log(`${tag}: browser checks passed (${engine})`);
     await page.close();

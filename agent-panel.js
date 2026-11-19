@@ -26,6 +26,13 @@ const DEFAULT_LABELS = {
   attachLink: 'Attach link',
   cancel: 'Cancel',
   close: 'Close',
+  compact: 'Compact conversation',
+  compactHint: 'Older messages are summarized for the model. Your transcript stays as it is.',
+  compacting: 'Compacting…',
+  context: 'Context',
+  contextSummarized: (when) => (when ? `Earlier messages summarized ${when}` : 'Earlier messages are summarized'),
+  contextTokens: (used, window, estimated) => `${used} of ${window} tokens${estimated ? ' (estimated)' : ''}`,
+  contextUsed: (percent) => `${percent}% of context used`,
   conversations: 'Conversations',
   defaultModel: 'Default',
   defaultModelNamed: (name) => `Default (${name})`,
@@ -185,6 +192,43 @@ export function safeHref(href) {
 }
 
 // Same day: the time; otherwise the date.
+// 1234 -> "1.2k", 200000 -> "200k", 1000000 -> "1M": token counts for the context card.
+export function formatTokens(n) {
+  const value = Number(n) || 0;
+  const short = (x, unit) => `${x >= 10 ? Math.round(x) : Math.round(x * 10) / 10}${unit}`;
+  if (value >= 1e6) return short(value / 1e6, 'M');
+  if (value >= 1e3) return short(value / 1e3, 'k');
+  return String(Math.round(value));
+}
+
+// The context ring: a track and an arc that `set(share)` fills from the top, clockwise.
+function contextRing() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'ctx-ring');
+  const circle = (cls) => {
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', '10');
+    c.setAttribute('cy', '10');
+    c.setAttribute('r', '7.5');
+    c.setAttribute('class', cls);
+    svg.append(c);
+    return c;
+  };
+  circle('ctx-track');
+  const arc = circle('ctx-arc');
+  const length = 2 * Math.PI * 7.5;
+  arc.setAttribute('stroke-dasharray', `${length} ${length}`);
+  return {
+    svg,
+    set(share) { arc.setAttribute('stroke-dashoffset', String(length * (1 - Math.max(0, Math.min(1, share))))); },
+  };
+}
+
 export function defaultFormatDate(value) {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime())) return '';
@@ -312,7 +356,7 @@ export class AgentPanelElement extends Base {
   static get observedAttributes() {
     return ['heading', 'placeholder', 'hint', 'empty-title', 'empty-text', 'running', 'disabled', 'closable',
       'no-attachments', 'accept', 'error', 'allow-empty-text', 'mention-trigger', 'no-add-menu', 'default-model', 'no-default-model',
-      'plain-text', 'active', 'has-more', 'conversations-menu'];
+      'plain-text', 'active', 'has-more', 'conversations-menu', 'context-threshold'];
   }
 
   static define(tag = this.tagName, registry = globalThis.customElements) {
@@ -352,6 +396,8 @@ export class AgentPanelElement extends Base {
     this._conversations = [];
     this._formatDate = defaultFormatDate;
     this._switcherOpen = false;
+    this._contextUsage = null;
+    this._contextOpen = false;
     this.attachShadow({ mode: 'open' });
     this._build();
   }
@@ -527,6 +573,26 @@ export class AgentPanelElement extends Base {
     this._schedule();
   }
 
+  // How full the conversation's context is: { used, window, estimated?, summarizedAt?,
+  // compacting?, canCompact? } in tokens, or null. The composer shows a small ring once
+  // used / window reaches `context-threshold`; it opens a card with a Compact button.
+  get contextUsage() { return this._contextUsage; }
+
+  set contextUsage(value) {
+    const used = Number(value?.used);
+    const window = Number(value?.window);
+    this._contextUsage = value && typeof value === 'object' && window > 0 && used >= 0 ? { ...value, used, window } : null;
+    this._schedule();
+  }
+
+  // The share of the window (0–1) at which the context ring appears. Default 0.6.
+  get contextThreshold() {
+    const n = Number.parseFloat(this.getAttribute('context-threshold'));
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.6;
+  }
+
+  set contextThreshold(value) { this._reflect('context-threshold', value == null ? '' : String(value)); }
+
   get closable() { return this.hasAttribute('closable'); }
 
   set closable(value) { this.toggleAttribute('closable', Boolean(value)); }
@@ -538,6 +604,11 @@ export class AgentPanelElement extends Base {
   openConversations() { this._setSwitcher(true); }
 
   closeConversations() { this._setSwitcher(false); }
+
+  // Opens or closes the context card (only while the context ring has something to show).
+  openContextUsage() { this._setContextCard(true); }
+
+  closeContextUsage() { this._setContextCard(false); }
 
   defineEntry(type, fn) {
     if (typeof fn === 'function') this._renderers.set(type, fn);
@@ -816,7 +887,8 @@ export class AgentPanelElement extends Base {
   connectedCallback() {
     // Properties set before the element was defined shadow the accessors; replay them.
     this._upgradeProperties(['entries', 'suggestions', 'markdown', 'labels', 'draft', 'references', 'error', 'running', 'disabled', 'closable',
-      'models', 'model', 'options', 'optionValues', 'addMenu', 'conversations', 'active', 'hasMore', 'formatDate']);
+      'models', 'model', 'options', 'optionValues', 'addMenu', 'conversations', 'active', 'hasMore', 'formatDate',
+      'contextUsage', 'contextThreshold']);
     if (!this._resize && typeof ResizeObserver !== 'undefined') {
       this._resize = new ResizeObserver(() => this.scrollToBottom());
       this._resize.observe(this.$inner);
@@ -839,6 +911,7 @@ export class AgentPanelElement extends Base {
     this._resize = null;
     if (this._menu) this._closeMenu({ focus: false });
     this._setSwitcher(false, { focus: false });
+    this._setContextCard(false, { focus: false });
     // A move disconnects and reconnects in one task; only release previews if it stays out.
     queueMicrotask(() => {
       if (this.isConnected || this._previewsRevoked) return;
@@ -1268,6 +1341,34 @@ export class AgentPanelElement extends Base {
       },
     });
     this.$hint = h('span', { class: 'hint', part: 'hint' });
+    this.$ctxRing = contextRing();
+    this.$ctxButton = h('button', {
+      type: 'button',
+      class: 'btn btn--icon ctx-btn',
+      part: 'context-usage-button',
+      'aria-haspopup': 'dialog',
+      'aria-expanded': 'false',
+      onClick: () => this._setContextCard(!this._contextOpen),
+    }, this.$ctxRing.svg);
+    this.$ctxUsed = h('div', { class: 'ctx-used' });
+    this.$ctxTokens = h('div', { class: 'ctx-tokens' });
+    this.$ctxSummary = h('div', { class: 'ctx-summary' });
+    this.$ctxCompact = h('button', {
+      type: 'button', class: 'btn btn--tonal btn--sm ctx-compact', part: 'context-compact',
+      onClick: () => this._emit('agent-compact'),
+    });
+    this.$ctxHint = h('p', { class: 'ctx-hint' });
+    this.$ctxCard = h('div', {
+      class: 'ctx-card', part: 'context-usage-card', role: 'dialog', hidden: true,
+      onKeydown: (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._setContextCard(false);
+        this.$ctxButton.focus();
+      },
+    }, this.$ctxUsed, this.$ctxTokens, this.$ctxSummary, this.$ctxCompact, this.$ctxHint);
+    this.$ctx = h('div', { class: 'ctx', part: 'context-usage', hidden: true }, this.$ctxButton, this.$ctxCard);
     this.$stop = h('button', { type: 'button', class: 'btn btn--icon btn--tonal', part: 'stop', onClick: () => this._emit('agent-stop') }, icon('stop'));
     this.$send = h('button', { type: 'submit', class: 'btn btn--icon btn--primary', part: 'send' }, icon('send'));
     this.$mention = h('div', { class: 'mention', part: 'mention', hidden: true }, slot('mention'));
@@ -1287,7 +1388,7 @@ export class AgentPanelElement extends Base {
         'div',
         { class: 'row' },
         this.$add, this.$attach, slot('composer-actions'), this.$hint, h('div', { class: 'spacer' }),
-        this.$optionsButton, this.$modelButton, this.$stop, this.$send,
+        this.$ctx, this.$optionsButton, this.$modelButton, this.$stop, this.$send,
       )),
       this.$fileInput,
     );
@@ -1392,6 +1493,69 @@ export class AgentPanelElement extends Base {
     if (this._onSwitcherOutside) document.removeEventListener('pointerdown', this._onSwitcherOutside, true);
     this._onSwitcherOutside = null;
     if (focus && this.$switchPop.contains(this.shadowRoot.activeElement)) this.$switchButton.focus();
+  }
+
+  // The share of the window in use, or null when the ring has nothing to show.
+  _contextShare() {
+    const usage = this._contextUsage;
+    if (!usage) return null;
+    return Math.min(1, usage.used / usage.window);
+  }
+
+  _setContextCard(open, { focus = true } = {}) {
+    const next = Boolean(open) && this._contextShare() !== null;
+    if (next === this._contextOpen) return;
+    this._contextOpen = next;
+    this.$ctxButton.setAttribute('aria-expanded', String(next));
+    this.$ctxCard.hidden = !next;
+    if (next) {
+      if (this._menu) this._closeMenu({ focus: false });
+      this._setSwitcher(false, { focus: false });
+      this._onContextOutside = (e) => {
+        if (!e.composedPath().includes(this.$ctx)) this._setContextCard(false, { focus: false });
+      };
+      document.addEventListener('pointerdown', this._onContextOutside, true);
+      this._renderContext();
+      return;
+    }
+    if (this._onContextOutside) document.removeEventListener('pointerdown', this._onContextOutside, true);
+    this._onContextOutside = null;
+    if (focus && this.$ctxCard.contains(this.shadowRoot.activeElement)) this.$ctxButton.focus();
+    this._renderContext();
+  }
+
+  _renderContext() {
+    const share = this._contextShare();
+    // The ring stays while its card is open, so a compaction that drops the share below
+    // the threshold shows its result instead of vanishing.
+    const show = share !== null && (share >= this.contextThreshold || this._contextOpen);
+    this.$ctx.hidden = !show;
+    if (!show) {
+      if (this._contextOpen) this._setContextCard(false, { focus: false });
+      return;
+    }
+    const labels = this._labels;
+    const usage = this._contextUsage;
+    const percent = Math.round(share * 100);
+    const level = share >= 0.95 ? 'critical' : share >= 0.8 ? 'high' : 'normal';
+    this.$ctx.dataset.level = level;
+    this.$ctx.classList.toggle('ctx--busy', Boolean(usage.compacting));
+    this.$ctxRing.set(share);
+    const name = `${labels.context}: ${labels.contextUsed(percent)}`;
+    this.$ctxButton.setAttribute('aria-label', name);
+    this.$ctxButton.title = name;
+    this.$ctxCard.setAttribute('aria-label', labels.context);
+    this.$ctxUsed.textContent = labels.contextUsed(percent);
+    this.$ctxTokens.textContent = labels.contextTokens(formatTokens(usage.used), formatTokens(usage.window), Boolean(usage.estimated));
+    const summarized = usage.summarizedAt ? labels.contextSummarized(this._formatDate(usage.summarizedAt)) : '';
+    this.$ctxSummary.textContent = summarized;
+    this.$ctxSummary.hidden = !summarized;
+    const canCompact = usage.canCompact !== false;
+    this.$ctxCompact.hidden = !canCompact;
+    this.$ctxHint.hidden = !canCompact;
+    this.$ctxCompact.textContent = usage.compacting ? labels.compacting : labels.compact;
+    this.$ctxCompact.disabled = Boolean(usage.compacting) || this.running || this.disabled;
+    this.$ctxHint.textContent = labels.compactHint;
   }
 
   _onSwitcherKeydown(e) {
@@ -1502,6 +1666,7 @@ export class AgentPanelElement extends Base {
     }
     this._renderControls();
     this._renderMenu();
+    this._renderContext();
     this.scrollToBottom();
   }
 
@@ -1566,6 +1731,7 @@ export class AgentPanelElement extends Base {
 
   _openMenu(name, view = 'list') {
     if (this._menu && this._menu.name !== name) this._closeMenu({ focus: false });
+    this._setContextCard(false, { focus: false });
     this.closeMention();
     this._menu = { name, view, query: '' };
     this._menuKey = null;

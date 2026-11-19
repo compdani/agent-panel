@@ -81,6 +81,15 @@ export interface Labels {
   attachLink: string;
   cancel: string;
   close: string;
+  compact: string;
+  compactHint: string;
+  compacting: string;
+  context: string;
+  /** `when` is `formatDate(summarizedAt)`, or `''`. */
+  contextSummarized(when: string): string;
+  /** `used` and `window` are already short ("144k"). */
+  contextTokens(used: string, window: string, estimated: boolean): string;
+  contextUsed(percent: number): string;
   conversations: string;
   defaultModel: string;
   defaultModelNamed(name: string): string;
@@ -195,6 +204,24 @@ export interface AgentPanelEventMap {
   'agent-delete-conversation': CustomEvent<{ id: Conversation['id']; conversation: Conversation }>;
   /** The list's "Load more" button (shown while `hasMore`). */
   'agent-load-more': CustomEvent<null>;
+  /** The context card's Compact button. The host summarizes, then updates `contextUsage`. */
+  'agent-compact': CustomEvent<null>;
+}
+
+/** How full the conversation's context is, for the composer's context ring. */
+export interface ContextUsage {
+  /** Tokens in use. */
+  used: number;
+  /** The model's context window in tokens; the ring hides without one. */
+  window: number;
+  /** Adds "(estimated)" to the token line. */
+  estimated?: boolean;
+  /** When earlier messages were last summarized (shown through `formatDate`). */
+  summarizedAt?: string | number | Date;
+  /** Spins the ring and disables Compact. */
+  compacting?: boolean;
+  /** `false` hides the Compact button (summaries are off). */
+  canCompact?: boolean;
 }
 
 export type IconName =
@@ -243,6 +270,10 @@ export declare class AgentPanelElement extends HTMLElement {
   hasMore: boolean;
   /** Non-functions restore the built-in format. */
   formatDate: (value: unknown) => string;
+  /** The context ring's data; `null` (or no `window`) hides it. */
+  contextUsage: ContextUsage | null;
+  /** Reflects `context-threshold`: the share (0–1) at which the ring appears. Default 0.6. */
+  contextThreshold: number;
   /** The model menu; empty hides it. Returns a copy with ids as strings. */
   get models(): ModelChoice[];
   set models(value: Array<string | ModelChoice> | null | undefined);
@@ -261,6 +292,9 @@ export declare class AgentPanelElement extends HTMLElement {
   /** Opens the conversation switcher (only with `conversations-menu`). */
   openConversations(): void;
   closeConversations(): void;
+  /** Opens the context card (only while the ring has data). */
+  openContextUsage(): void;
+  closeContextUsage(): void;
   submit(text?: string): boolean;
   clearComposer(options?: ClearComposerOptions): void;
   addFiles(files: Iterable<File> | ArrayLike<File>, opts?: { pasted?: boolean }): { added: Attachment[]; problems: string[] };
@@ -304,6 +338,8 @@ export declare class AgentPanelElement extends HTMLElement {
 export declare function safeHref(href: unknown): string;
 /** Today: the time. Otherwise the date (with the year when it isn't this year). */
 export declare function defaultFormatDate(value: unknown): string;
+/** 1234 → "1.2k", 200000 → "200k", 1000000 → "1M". */
+export declare function formatTokens(n: number): string;
 
 /** `${type}:${id}`, the identity references are deduplicated by. */
 export declare function referenceKey(ref: Pick<Reference, 'type' | 'id'>): string;

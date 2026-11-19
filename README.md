@@ -44,7 +44,7 @@ sends something.
 13. [Slots](#slots)
 14. [Styling](#styling)
 15. [Extending the panel](#extending-the-panel)
-16. [The agent page](#the-agent-page) and [conversations in the panel](#conversations-in-the-panel)
+16. [The agent page](#the-agent-page), [conversations in the panel](#conversations-in-the-panel) and [context usage](#context-usage-and-compact)
 17. [Using it from a framework](#using-it-from-a-framework)
 18. [Accessibility](#accessibility)
 19. [Browser support and limits](#browser-support-and-limits)
@@ -174,6 +174,7 @@ same name.
 | `default-model` | string | `""` | The name shown for the model menu's Default entry, e.g. `gpt-4o`. |
 | `no-default-model` | boolean | off | Leaves the Default entry out of the model menu. |
 | `mention-trigger` | string | none | A character, usually `@`, that opens a mention while typing. See [References and mentions](#references-and-mentions). |
+| `context-threshold` | number 0–1 | `0.6` | The share of the context window at which the [context ring](#context-usage-and-compact) appears. *Reflected* as `contextThreshold`. |
 | `theme` | `"dark"` | none | Built-in dark colours, for pages that don't set their own [colour tokens](#styling). |
 
 The limit attributes and `sticky-attachments` are read when they're needed, so changing
@@ -194,6 +195,7 @@ them takes effect from the next file added or message sent.
 | `markdown` | `(text) => string \| null` | Turns reply text into HTML. Without it, replies show as plain paragraphs. **Return safe HTML**: the panel inserts it as is. |
 | `labels` | `object` | Replaces the panel's own words, for translation. See below. |
 | `limits` | `object` | *Read only.* `{ accept, maxFileSize, maxTotalSize, maxFiles }` as currently in effect. |
+| `contextUsage` | `{ used, window, estimated?, summarizedAt?, compacting?, canCompact? } \| null` | How full the conversation's context is, in tokens. Draws the [context ring](#context-usage-and-compact). |
 | `running`, `disabled`, `closable`, `error` | | The same as the attributes. |
 
 ### `labels`
@@ -241,6 +243,7 @@ yet.
 | `scrollToBottom({ force? })` | | Scrolls to the latest message if the panel is following. With `force: true`, it scrolls anyway and starts following again. |
 | `defineEntry(type, render)` | the panel | Draws entries of `type` with `render(entry, panel)`, which returns a DOM node. Pass `null` to remove a renderer. |
 | `emitAction(action, detail?)` | `boolean` | Fires `agent-action` with `{ action, ...detail }`. Use it for buttons inside custom entries. |
+| `openContextUsage()`, `closeContextUsage()` | | Opens or closes the context card (while `contextUsage` is set). |
 
 | Static member | Description |
 |---|---|
@@ -261,6 +264,7 @@ All events bubble and cross the shadow boundary (`composed`).
 | `agent-close` | — | no | The close button is pressed. The panel doesn't hide itself. |
 | `agent-select-conversation`, `agent-new-conversation`, `agent-delete-conversation` | see [Page events](#page-events) | | From the switcher (`conversations-menu`) or the page's sidebar. |
 | `agent-load-more` | — | no | "Load more" is pressed (shown while `has-more` is set). Fetch the next page and set `conversations`. |
+| `agent-compact` | — | no | The context card's Compact button is pressed. Summarize the conversation, then update `contextUsage`. |
 | `agent-action` | `{ action, ...}` | yes | A button in a custom entry called `emitAction()`. |
 | `agent-attachments-change` | `{ attachments }` | no | Files are added or removed. |
 | `agent-attachment-error` | `{ problems: string[] }` | no | One or more files were refused. |
@@ -520,7 +524,8 @@ Style individual pieces with `::part()`:
 
 `panel`, `header`, `heading`, `close`, `subheader`, `transcript`, `entries`, `empty`,
 `suggestion`, `bubble`, `message`, `tools`, `error`, `composer`, `attachments`,
-`attachment`, `reference`, `mention`, `input`, `attach`, `hint`, `send`, `stop`, `drop`.
+`attachment`, `reference`, `mention`, `input`, `attach`, `hint`, `send`, `stop`, `drop`,
+`context-usage`, `context-usage-button`, `context-usage-card`, `context-compact`.
 The page adds [its own parts](#page-styling).
 
 ```css
@@ -753,6 +758,35 @@ class MyAgentPage extends AgentPageElement {
 }
 MyAgentPage.define();
 ```
+
+---
+
+## Context usage and Compact
+
+When the model's context window starts to fill, the composer can show a small ring
+before the model menu, filled to the share in use. Set `contextUsage` from your backend:
+
+```js
+panel.contextUsage = { used: 144000, window: 200000, estimated: true };
+panel.addEventListener('agent-compact', async () => {
+  panel.contextUsage = { ...panel.contextUsage, compacting: true };
+  const { context } = await api.compact(conversationId); // summarize older messages
+  panel.contextUsage = { used: context.tokens, window: context.window, summarizedAt: context.summarizedAt };
+});
+```
+
+- The ring appears once `used / window` reaches `context-threshold` (60% by default), and
+  turns amber at 80% and red at 95%.
+- Clicking it opens a card: "72% of context used", "144k of 200k tokens (estimated)",
+  when earlier messages were last summarized (`summarizedAt`), and a **Compact
+  conversation** button that fires `agent-compact`. The panel doesn't summarize anything
+  itself.
+- `compacting: true` spins the ring and disables the button. `canCompact: false` hides
+  the button, for a backend that can't summarize.
+- While the card is open the ring stays, even below the threshold, so the person sees the
+  result of a compaction. Escape or a click outside closes it.
+- Labels: `context`, `contextUsed(percent)`, `contextTokens(used, window, estimated)`,
+  `contextSummarized(when)`, `compact`, `compacting`, `compactHint`.
 
 ---
 
@@ -1044,3 +1078,10 @@ textarea. Tests that select `textarea` should select `[part=input]` instead.
 - `floating`: the panel as a rounded card hovering over the page.
 - Fix: the red confirm-Delete button and the coloured "Load more" lost their colours to
   `.btn` (since 0.4.0, the page's sidebar too).
+
+## New in 0.5.0
+
+- The composer's [context ring](#context-usage-and-compact): `contextUsage`,
+  `context-threshold`, `openContextUsage()` / `closeContextUsage()` and the
+  `agent-compact` event, so a conversation nearing its model's context window can be
+  compacted with one click. `formatTokens()` is exported.

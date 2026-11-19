@@ -212,6 +212,26 @@ button { font: inherit; }
 .menu-pop--start { left: 0; }
 .menu-pop--end { right: 0; }
 .menu-pop--model { width: 380px; }
+
+/* The context ring and its card (contextUsage). */
+.ctx { position: relative; display: inline-flex; }
+.ctx[hidden] { display: none; }
+.ctx-ring { display: block; transform: rotate(-90deg); }
+.ctx-track { fill: none; stroke: var(--agent-border); stroke-width: 2.5; }
+.ctx-arc { fill: none; stroke: var(--agent-primary); stroke-linecap: round; stroke-width: 2.5; transition: stroke-dashoffset .3s; }
+.ctx[data-level="high"] .ctx-arc { stroke: var(--agent-warning); }
+.ctx[data-level="critical"] .ctx-arc { stroke: var(--agent-error); }
+.ctx--busy .ctx-ring { animation: ctx-spin 1s linear infinite; }
+@keyframes ctx-spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@media (prefers-reduced-motion: reduce) { .ctx--busy .ctx-ring { animation: none; } .ctx-arc { transition: none; } }
+.ctx-card { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 12px; bottom: calc(100% + 8px); box-shadow: 0 12px 32px rgba(15, 23, 42, .18), 0 2px 6px rgba(15, 23, 42, .08); color: var(--agent-text); display: flex; flex-direction: column; gap: 4px; padding: 12px; position: absolute; right: -40px; width: min(280px, calc(100cqw - 24px)); z-index: 22; }
+.ctx-card[hidden] { display: none; }
+.ctx-used { font-weight: 600; }
+.ctx-tokens, .ctx-summary, .ctx-hint { color: var(--agent-muted); font-size: 12px; }
+.ctx-summary[hidden], .ctx-hint[hidden], .ctx-compact[hidden] { display: none; }
+.ctx-compact { align-self: flex-start; margin-top: 6px; }
+.ctx-hint { line-height: 1.4; margin: 2px 0 0; }
+:host([theme="dark"]) .ctx-card { box-shadow: 0 12px 32px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04); }
 .menu-pop--add:has(.menu-form) { width: 380px; }
 .menu-body { overflow-y: auto; padding: 4px 0; }
 .menu-group { background: var(--agent-surface); color: var(--agent-muted); font-size: 11px; letter-spacing: .04em; padding: 8px 12px 4px; position: sticky; text-transform: uppercase; top: 0; z-index: 1; }

@@ -201,6 +201,7 @@ declare function icon(nameOrPath: keyof typeof ICONS | string, size?: number, cl
 | `no-add-menu`, `default-model`, `no-default-model` | yes | each redraw (§6 Menus) |
 | `conversations-menu` | yes | each redraw (CV3) |
 | `floating` | no (CSS only: 10px inset, `--agent-radius` corners, border, shadow) | — |
+| `context-threshold` | yes | each redraw (CX1) |
 | Page: `active`, `renamable`, `no-sidebar` | yes | each redraw (`no-sidebar` is CSS only) |
 | `theme="dark"` | no (CSS only) | — |
 
@@ -405,6 +406,32 @@ negative, blank or not a number falls back to its default.
 - **CV4.** `static conversationSwitcher` (default `true`) gates CV3. `<agent-page>` sets
   it to `false`: its sidebar shows the list.
 
+### Context usage (0.5.0)
+
+- **CX1.** `contextUsage` is `{ used, window, estimated?, summarizedAt?, compacting?,
+  canCompact? }` (tokens) or `null`. A value without a positive `window`, or with a
+  negative `used`, becomes `null`. The composer's action row shows a ring
+  (`part="context-usage"`, before the options and model menus) once `used / window`
+  reaches `context-threshold` (default `0.6`; a value outside 0–1 or not a number falls
+  back to it), filled to that share. Its arc uses `--agent-primary`, then
+  `--agent-warning` at 80% and `--agent-error` at 95% (`data-level` `normal`, `high`,
+  `critical`). `compacting` spins it (not with `prefers-reduced-motion`).
+- **CX2.** The ring's button (`part="context-usage-button"`, labelled
+  `labels.context` + `labels.contextUsed(percent)`) opens a card
+  (`part="context-usage-card"`, `role="dialog"`) above it: `contextUsed(percent)`,
+  `contextTokens(used, window, estimated)` with `formatTokens()` numbers,
+  `contextSummarized(formatDate(summarizedAt))` when `summarizedAt` is set, and a
+  Compact button (`part="context-compact"`, `labels.compact`, or `labels.compacting`
+  while `compacting`) with `labels.compactHint` under it. `canCompact: false` hides the
+  button and the hint. Compact is disabled while `compacting`, `running` or `disabled`.
+- **CX3.** Compact fires `agent-compact` (`null`, not cancelable). The element changes
+  nothing itself: the host summarizes, sets `compacting`, then the new `contextUsage`.
+- **CX4.** While the card is open the ring stays even below the threshold, so the card
+  shows the result of a compaction. Escape closes the card and refocuses the button; a
+  press outside closes it; opening it closes a composer menu and the switcher, and
+  opening a composer menu closes it. `openContextUsage()` / `closeContextUsage()` do
+  the same from code (opening needs a `contextUsage`).
+
 ### Page
 
 - **P1.** The layout is a grid of the sidebar (`--agent-sidebar-width`) and the panel. The
@@ -524,6 +551,7 @@ menu cards. Each is optional and has defaults:
 | `agent-new-conversation` | `null` | no | New chat button (sidebar or switcher) |
 | `agent-delete-conversation` | `{ id, conversation }` | no | Confirmed delete (P4), sidebar or switcher |
 | `agent-load-more` | `null` | no | "Load more" at the end of the list (CV2) |
+| `agent-compact` | `null` | no | The context card's Compact button (CX3) |
 | Page: `agent-rename` | `{ title }` | yes | Committed title edit (P5) |
 
 ### Slots
@@ -541,7 +569,8 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - **Parts**: `panel header heading close subheader transcript entries empty suggestion
   bubble message tools error composer attachments attachment reference mention input attach
   hint send stop drop add-menu model-menu options-menu menu switcher switcher-button
-  switcher-menu switcher-new conversation-list conversation load-more`. The page adds
+  switcher-menu switcher-new conversation-list conversation load-more context-usage
+  context-usage-button context-usage-card context-compact`. The page adds
   `page sidebar new-chat history title title-input context-bar`.
 - **Tokens** (defaults in `styles.js`): `--agent-primary --agent-on-primary
   --agent-surface --agent-surface-alt --agent-text --agent-muted --agent-border
@@ -722,3 +751,12 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - New `floating` attribute: the panel as a card hovering over the page.
 - Fix: the red confirm-Delete button and the coloured "Load more" lost their colours to
   `.btn` (since 0.4.0, the page's sidebar too).
+
+## 0.5.0
+
+- Minor version (new public names): the composer's context ring and card (CX1–CX4):
+  the `contextUsage` property, the `context-threshold` attribute (`contextThreshold`),
+  `openContextUsage()` / `closeContextUsage()`, the `agent-compact` event, the parts
+  `context-usage`, `context-usage-button`, `context-usage-card` and `context-compact`,
+  the labels `compact`, `compactHint`, `compacting`, `context`, `contextSummarized`,
+  `contextTokens` and `contextUsed`, and the exported `formatTokens()`.
