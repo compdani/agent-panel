@@ -199,6 +199,8 @@ declare function icon(nameOrPath: keyof typeof ICONS | string, size?: number, cl
 | `plain-text` | yes (the draft moves between the editor and the textarea) | each redraw, and `draft` |
 | `mention-trigger` | yes (it decides the "+" menu's Add context item) | each keystroke (`input`) |
 | `no-add-menu`, `default-model`, `no-default-model` | yes | each redraw (§6 Menus) |
+| `conversations-menu` | yes | each redraw (CV3) |
+| `floating` | no (CSS only: 10px inset, `--agent-radius` corners, border, shadow) | — |
 | Page: `active`, `renamable`, `no-sidebar` | yes | each redraw (`no-sidebar` is CSS only) |
 | `theme="dark"` | no (CSS only) | — |
 
@@ -390,11 +392,13 @@ negative, blank or not a number falls back to its default.
 - **CV2.** With `has-more`, the list ends with a "Load more" button (`part="load-more"`,
   `labels.loadMore`) that fires `agent-load-more`. The element never fetches or appends
   rows itself.
-- **CV3.** `<agent-panel conversations-menu>` shows a switcher row under the header
-  (`part="switcher"`): a button with the active row's title (`labels.untitled` when it
-  has none, or when `active` matches no row) that opens a dropdown (`part="switcher-menu"`)
-  with the rows, and a New chat button (`part="switcher-new"`, fires
-  `agent-new-conversation`). Opening focuses the active row (or the first); ArrowUp/Down
+- **CV3.** `<agent-panel conversations-menu>` makes the header's title a switcher
+  (`part="switcher"`, after the `header-start` slot, whose default `heading` it hides): a
+  button with the active row's title and a chevron (`labels.untitled` when it has none,
+  or when `active` matches no row) that opens a dropdown card under it
+  (`part="switcher-menu"`) with the rows, each showing its date and Delete, then the
+  `switcher-end` slot (hidden while empty); and a New chat button before Close
+  (`part="switcher-new"`, fires `agent-new-conversation`). Opening focuses the active row (or the first); ArrowUp/Down
   move between rows; Escape closes and refocuses the button; a press outside closes it;
   choosing a row closes it. A confirmed delete keeps it open. `openConversations()` /
   `closeConversations()` do the same from code, and opening closes a composer menu.
@@ -524,7 +528,7 @@ menu cards. Each is optional and has defaults:
 
 ### Slots
 
-`header-start` (its default content is `heading`), `header-actions`, `subheader` (its row
+`header-start` (its default content is `heading`), `header-actions`, `switcher-end` (CV3), `subheader` (its row
 is hidden while the slot is empty), `empty` (its default content is the empty-state title
 and text), `transcript-end`, `composer-chips` (the chip row is hidden while there are no
 attachments and the slot is empty), `composer-actions`, `mention` (M5), and
@@ -709,3 +713,12 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - Minor version: the conversation row styles and `btn--danger` moved from the page's
   stylesheet to the base one, so `::part(conversation)` styles now also reach the
   panel's switcher rows.
+
+## 0.4.1
+
+- The `conversations-menu` switcher moved into the header as its title, with New chat
+  beside Close (CV3); its dropdown is a card anchored under the title, rows always show
+  their date and Delete, and the new `switcher-end` slot sits under the list.
+- New `floating` attribute: the panel as a card hovering over the page.
+- Fix: the red confirm-Delete button and the coloured "Load more" lost their colours to
+  `.btn` (since 0.4.0, the page's sidebar too).

@@ -1129,7 +1129,6 @@ export class AgentPanelElement extends Base {
     this.$heading = h('span', { class: 'heading', part: 'heading' });
     this.$close = h('button', { type: 'button', class: 'btn btn--icon', part: 'close', onClick: () => this._emit('agent-close') }, icon('close'));
     this.$subhead = h('div', { class: 'subhead', part: 'subheader', hidden: true }, slot('subheader'));
-    this.$head = h('div', { class: 'head' }, slot('header-start', this.$heading), h('div', { class: 'spacer' }), slot('header-actions'), this.$close);
     this._convList = new ConversationList(this);
     this.$switchLabel = h('span', { class: 'switch-label' });
     this.$switchButton = h('button', {
@@ -1145,11 +1144,12 @@ export class AgentPanelElement extends Base {
           this._setSwitcher(true);
         }
       },
-    }, icon('history', 16), this.$switchLabel, icon('chevron-down', 16));
+    }, this.$switchLabel, icon('chevron-down', 16));
     this.$switchNew = h('button', {
       type: 'button',
       class: 'btn btn--icon',
       part: 'switcher-new',
+      hidden: true,
       onClick: () => {
         this._setSwitcher(false, { focus: false });
         this._emit('agent-new-conversation');
@@ -1157,9 +1157,12 @@ export class AgentPanelElement extends Base {
     }, icon('plus'));
     this.$switchPop = h('div', {
       class: 'switch-pop', part: 'switcher-menu', hidden: true, onKeydown: (e) => this._onSwitcherKeydown(e),
-    }, this._convList.el);
-    this.$switcher = h('div', { class: 'switcher', part: 'switcher', hidden: true }, this.$switchButton, this.$switchNew, this.$switchPop);
-    this.$header = h('header', { class: 'header', part: 'header' }, this.$head, this.$switcher, this.$subhead);
+    }, h('div', { class: 'switch-list' }, this._convList.el), this.$switchEnd = h('div', { class: 'switch-end', hidden: true }, slot('switcher-end')));
+    // The switcher is the header's title: the open conversation and a chevron, with New
+    // chat beside Close.
+    this.$switcher = h('div', { class: 'switcher', part: 'switcher', hidden: true }, this.$switchButton, this.$switchPop);
+    this.$head = h('div', { class: 'head' }, slot('header-start', this.$heading), this.$switcher, h('div', { class: 'spacer' }), slot('header-actions'), this.$switchNew, this.$close);
+    this.$header = h('header', { class: 'header', part: 'header' }, this.$head, this.$subhead);
 
     this.$emptyTitle = h('h2', { class: 'empty-title' });
     this.$emptyText = h('p', { class: 'empty-text' });
@@ -1412,6 +1415,8 @@ export class AgentPanelElement extends Base {
   _renderSwitcher() {
     const show = this._showSwitcher();
     this.$switcher.hidden = !show;
+    this.$switchNew.hidden = !show;
+    this.$heading.hidden = show;
     if (!show) {
       this._setSwitcher(false, { focus: false });
       return;
@@ -1503,6 +1508,8 @@ export class AgentPanelElement extends Base {
   _renderControls() {
     const assigned = (s) => s.assignedNodes({ flatten: true }).some((n) => n.nodeType === 1 || n.textContent.trim());
     this.$subhead.hidden = !assigned(this.$subhead.querySelector('slot'));
+    this.$switchEnd.hidden = !assigned(this.$switchEnd.querySelector('slot'));
+    this.$head.classList.toggle('head--start', assigned(this.$head.querySelector('slot[name="header-start"]')));
     this.$chips.hidden = !this._attachments.length && !this._references.length && !assigned(this.$chipSlot);
     const addItems = this._addItems();
     const plainAttach = addItems === null || (addItems.length === 1 && addItems[0].id === 'attach');

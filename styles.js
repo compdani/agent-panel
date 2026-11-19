@@ -48,7 +48,7 @@ button { font: inherit; }
 .conv-empty { color: var(--agent-muted); font-size: 12px; margin: 0; padding: 8px; }
 .conv { align-items: center; border-radius: 6px; display: flex; gap: 4px; min-height: 34px; padding: 2px 4px 2px 10px; }
 .conv:hover, .conv--active, .conv--confirm { background: var(--agent-surface-alt); }
-.conv-link { background: none; border: 0; color: inherit; cursor: pointer; flex: 1; font: inherit; font-size: 13px; min-width: 0; overflow: hidden; padding: 6px 0; text-align: left; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.conv-link { background: none; border: 0; color: inherit; cursor: pointer; flex: 1; font: inherit; font-size: 13px; min-width: 0; overflow: hidden; padding: 6px 8px 6px 0; text-align: left; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .conv-link:focus-visible { outline: 2px solid var(--agent-primary); outline-offset: 2px; }
 .conv--active .conv-link { color: var(--agent-primary); font-weight: 500; }
 .conv-when { color: var(--agent-muted); flex: none; font-size: 11px; }
@@ -58,17 +58,38 @@ button { font: inherit; }
 .conv:hover .conv-del, .conv:focus-within .conv-del { display: inline-flex; }
 /* Touch screens can't hover: always offer Delete there. */
 @media (hover: none) { .conv-when { display: none; } .conv-del { display: inline-flex; } }
-.conv-more { color: var(--agent-primary); margin: 4px 0; width: 100%; }
-.btn--danger { background: var(--agent-error); color: #fff; }
 
-/* <agent-panel conversations-menu>: the open conversation, a list of the others, New chat. */
-.switcher { align-items: center; display: flex; gap: 4px; padding: 0 8px 8px 14px; position: relative; }
-.switch-btn { align-items: center; background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 8px; color: inherit; cursor: pointer; display: flex; flex: 1; font: inherit; font-size: 13px; gap: 8px; min-height: 34px; min-width: 0; padding: 4px 8px 4px 10px; text-align: left; }
-.switch-btn:hover { background: var(--agent-surface-alt); }
+/* <agent-panel conversations-menu>: the title opens the conversation list; New chat sits by Close. */
+.head { position: relative; }
+/* An icon in header-start keeps its size; the title gives way. */
+:host([conversations-menu]) ::slotted([slot="header-start"]) { flex-shrink: 0; }
+.head--start { gap: 6px; }
+.head--start .switch-btn { margin-left: 0; }
+.switcher { display: flex; flex: 0 1 auto; min-width: 0; }
+.switch-btn { align-items: center; background: none; border: 0; border-radius: 8px; color: inherit; cursor: pointer; display: flex; font: inherit; font-size: 14px; font-weight: 600; gap: 2px; margin-left: -6px; min-height: 32px; min-width: 0; padding: 4px 6px; text-align: left; transition: background-color .15s; }
+.switch-btn:hover, .switch-btn[aria-expanded="true"] { background: var(--agent-surface-alt); }
 .switch-btn:focus-visible { outline: 2px solid var(--agent-primary); outline-offset: 1px; }
-.switch-btn .icon { color: var(--agent-muted); }
-.switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.switch-pop { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 8px; box-shadow: 0 5px 5px -3px rgba(0, 0, 0, .2), 0 8px 10px 1px rgba(0, 0, 0, .14), 0 3px 14px 2px rgba(0, 0, 0, .12); left: 14px; max-height: min(420px, 60vh); overflow-y: auto; padding: 4px; position: absolute; right: 8px; top: calc(100% - 4px); z-index: 25; }
+.switch-btn .icon { color: var(--agent-muted); transition: transform .15s; }
+.switch-btn[aria-expanded="true"] .icon { transform: rotate(180deg); }
+.switch-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switch-pop { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 12px; box-shadow: 0 12px 32px rgba(15, 23, 42, .18), 0 2px 6px rgba(15, 23, 42, .08); display: flex; flex-direction: column; left: 8px; max-height: min(460px, 65vh); overflow: hidden; position: absolute; top: calc(100% - 2px); width: min(380px, calc(100cqw - 16px)); z-index: 25; }
+.switch-list { overflow-y: auto; padding: 6px; }
+.switch-end { border-top: 1px solid var(--agent-border); flex: none; padding: 4px; }
+.switch-pop .conv { border-radius: 8px; gap: 2px; min-height: 36px; transition: background-color .12s; }
+.switch-pop .conv--active { background: color-mix(in srgb, var(--agent-primary) 8%, transparent); }
+.switch-pop .conv:hover, .switch-pop .conv:focus-within { background: var(--agent-surface-alt); }
+.switch-pop .conv--active:hover, .switch-pop .conv--active:focus-within { background: color-mix(in srgb, var(--agent-primary) 12%, transparent); }
+.switch-pop .conv-link:focus-visible { outline: none; }
+/* The list shows each row's date and Delete, like a menu, not only on hover. */
+.switch-pop .conv-when, .switch-pop .conv:hover .conv-when, .switch-pop .conv:focus-within .conv-when { display: inline; margin-right: 2px; }
+.switch-pop .conv-del, .switch-pop .conv:hover .conv-del { color: var(--agent-muted); display: inline-flex; }
+.switch-pop .conv-del:hover { color: var(--agent-error); }
+
+:host([theme="dark"]) .switch-pop { box-shadow: 0 12px 32px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04); }
+
+/* <agent-panel floating>: a card that hovers over the page instead of filling its box. */
+:host([floating]) { box-sizing: border-box; padding: 10px; }
+:host([floating]) .panel { border: 1px solid var(--agent-border); border-radius: var(--agent-radius); box-shadow: 0 12px 36px rgba(15, 23, 42, .22); overflow: hidden; }
 
 .scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .inner { display: flex; flex-direction: column; gap: 12px; min-height: 100%; padding: 16px; }
@@ -135,6 +156,10 @@ button { font: inherit; }
 .btn--tonal:hover:not(:disabled) { background: color-mix(in srgb, var(--agent-primary) 20%, transparent); }
 .btn--icon { border-radius: 50%; height: 32px; min-height: 32px; padding: 0; width: 32px; }
 .btn--sm { font-size: 12px; min-height: 26px; padding: 4px 10px; }
+/* After .btn, which would otherwise reset their colours. */
+.btn--danger { background: var(--agent-error); color: #fff; }
+.btn--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--agent-error) 88%, #000); }
+.conv-more { color: var(--agent-primary); margin: 4px 0; width: 100%; }
 .card { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); padding: 12px; }
 .badge { border-radius: 4px; font-size: 11px; font-weight: 500; padding: 2px 6px; text-transform: capitalize; }
 .tone-success { background: color-mix(in srgb, var(--agent-success) 14%, transparent); color: var(--agent-success); }
@@ -215,4 +240,5 @@ button { font: inherit; }
 .drop { align-items: center; background: color-mix(in srgb, var(--agent-surface) 88%, transparent); border: 2px dashed var(--agent-primary); border-radius: 12px; color: var(--agent-primary); display: flex; flex-direction: column; font-weight: 500; gap: 8px; inset: 8px; justify-content: center; pointer-events: none; position: absolute; z-index: 5; }
 
 @container (max-width: 380px) { .hint { display: none; } }
+:host([floating][theme="dark"]) .panel { box-shadow: 0 12px 36px rgba(0, 0, 0, .6); }
 `;

@@ -151,8 +151,9 @@ same name.
 |---|---|---|---|
 | `heading` | string | `""` | Title in the header. Hidden if the `header-start` slot is used. |
 | `closable` | boolean | off | Shows a close button that fires `agent-close`. *Reflected.* |
-| `conversations-menu` | boolean | off | Shows the conversation switcher under the header. See [Conversations in the panel](#conversations-in-the-panel). |
+| `conversations-menu` | boolean | off | Makes the header title a conversation switcher, with New chat beside Close. See [Conversations in the panel](#conversations-in-the-panel). |
 | `active` | string | | The id of the open conversation. *Reflected.* |
+| `floating` | boolean | off | Draws the panel as a card hovering over the page: a 10px inset, rounded corners (`--agent-radius`), a border and a soft shadow. |
 | `has-more` | boolean | off | Ends the conversation list with "Load more", which fires `agent-load-more`. *Reflected.* |
 | `placeholder` | string | `""` | Placeholder text in the composer. Also used as its accessible label. |
 | `hint` | string | `""` | Small text next to the composer buttons. Hidden when the panel is narrower than 380px. |
@@ -467,6 +468,7 @@ Slotted content belongs to your page, so your page's styles and frameworks apply
 |---|---|
 | `header-start` | Left of the header, in place of `heading`. |
 | `header-actions` | Right of the header, before the close button. |
+| `switcher-end` | The foot of the conversation switcher's dropdown (`conversations-menu`), e.g. "Open the full page". Hidden while empty. |
 | `subheader` | A row under the header. Hidden while empty. |
 | `empty` | Replaces the empty-state heading and text. Suggestions still show. |
 | `transcript-end` | After the last entry, e.g. Retry or Undo buttons. |
@@ -647,9 +649,11 @@ the page.
 ### Conversations in the panel
 
 `<agent-panel>` can carry the same conversation list for side panels: add
-`conversations-menu` and it shows a switcher under the header, with the open
-conversation's title, a dropdown of the others (each with Delete, which asks once), and a
-New chat button. It takes the same `conversations`, `active`, `has-more` and `formatDate`
+`conversations-menu` and the header's title becomes a switcher: the open conversation's
+title and a chevron, opening a dropdown of the conversations (each with its date and
+Delete, which asks once), and a New chat button beside Close. The title replaces
+`heading`; content in `header-start` (an icon, say) stays before it, and the
+`switcher-end` slot adds actions under the list. It takes the same `conversations`, `active`, `has-more` and `formatDate`
 as the page, and fires the same events.
 
 ```js
@@ -661,6 +665,13 @@ panel.addEventListener('agent-select-conversation', (e) => { e.preventDefault();
 panel.addEventListener('agent-new-conversation', () => startNewChat());
 panel.addEventListener('agent-delete-conversation', (e) => api.delete(e.detail.id));
 panel.addEventListener('agent-load-more', () => loadNextPage());
+```
+
+```html
+<agent-panel conversations-menu floating closable>
+  <span slot="header-start" class="mark">✦</span>
+  <button slot="switcher-end" onclick="openFullPage()">Open the full Agent page</button>
+</agent-panel>
 ```
 
 `openConversations()` and `closeConversations()` open and close the dropdown from code.
@@ -1023,3 +1034,13 @@ Built-in composer menus: "+", model and options. See [Composer menus](#composer-
 The "+" button replaces the paperclip by default; `no-add-menu` keeps the paperclip.
 The composer is a rich-text box (bold and italic, sent as markdown); `plain-text` keeps the
 textarea. Tests that select `textarea` should select `[part=input]` instead.
+
+## New in 0.4.1
+
+- The conversation switcher is the header's title (title and chevron), with New chat
+  beside Close, instead of a second row; its dropdown is a rounded card under the title
+  that shows each row's date and Delete. The new `switcher-end` slot adds actions under
+  the list.
+- `floating`: the panel as a rounded card hovering over the page.
+- Fix: the red confirm-Delete button and the coloured "Load more" lost their colours to
+  `.btn` (since 0.4.0, the page's sidebar too).

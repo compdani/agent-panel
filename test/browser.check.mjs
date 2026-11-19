@@ -538,6 +538,14 @@ try {
         panel.active = 'c2';
         await tick();
         assert(!switcher.hidden, 'switcher shown with conversations-menu');
+        assert(root.querySelector('[part=heading]').hidden && switcher.closest('.head'), 'switcher replaces the heading in the header');
+        assert(!root.querySelector('[part=switcher-new]').hidden, 'New chat shows in the header');
+        const end = root.querySelector('.switch-end');
+        assert(end.hidden, 'switcher-end hidden while empty');
+        const footer = Object.assign(document.createElement('button'), { slot: 'switcher-end', textContent: 'Open full page' });
+        panel.append(footer);
+        await new Promise((resolve) => setTimeout(resolve));
+        assert(!end.hidden, 'switcher-end shows slotted content');
         const button = root.querySelector('[part=switcher-button]');
         assert(button.textContent.includes('New chat'), 'untitled active conversation uses the untitled label');
         panel.active = 'c1';
@@ -574,6 +582,8 @@ try {
         panel.conversations = [];
         await tick();
         assert(switcher.hidden, 'switcher hides again');
+        assert(!root.querySelector('[part=heading]').hidden && root.querySelector('[part=switcher-new]').hidden, 'heading returns, New chat hides');
+        footer.remove();
       }
     }, tag);
     console.log(`${tag}: browser checks passed (${engine})`);
