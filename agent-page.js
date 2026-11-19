@@ -4,20 +4,6 @@
 // title and an "in context" bar. This module defines no tag: page.js does.
 import { AgentPanelElement, h, icon } from './agent-panel.js';
 
-// Conversation links may be relative or HTTP(S); anything else (javascript:, data:…) is
-// dropped, and the row becomes a button.
-function safeHref(href) {
-  if (href == null) return '';
-  // Read the scheme the way the URL parser does: tabs and newlines removed, and
-  // leading/trailing controls and spaces trimmed (so "java\tscript:" is still caught).
-  const raw = String(href);
-  const clean = raw.replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
-  if (!clean) return '';
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(clean);
-  if (!scheme) return raw; // Relative.
-  return ['http', 'https'].includes(scheme[1].toLowerCase()) ? raw : '';
-}
-
 // A comparable snapshot of plain data; anything unserializable never compares equal.
 function dataKey(value) {
   try {
@@ -27,17 +13,12 @@ function dataKey(value) {
   }
 }
 
+
+// The conversation words (newChat, untitled, conversations, delete…) live on the panel.
 const PAGE_LABELS = {
-  cancel: 'Cancel',
-  conversations: 'Conversations',
-  delete: 'Delete',
-  deleteConversation: (title) => `Delete ${title}`,
   inContext: 'In context:',
-  newChat: 'New chat',
-  noConversations: 'No conversations yet.',
   rename: 'Rename',
   titleLabel: 'Title',
-  untitled: 'New chat',
 };
 
 const PAGE_STYLES = `
@@ -51,21 +32,7 @@ const PAGE_STYLES = `
 
 .convs { background: var(--agent-surface); border-right: 1px solid var(--agent-border); display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 12px 8px; }
 .new-chat { flex: none; width: 100%; }
-.conv-list { flex: 1; min-height: 0; overflow-y: auto; }
-.conv-empty { color: var(--agent-muted); font-size: 12px; margin: 0; padding: 8px; }
-.conv { align-items: center; border-radius: 6px; display: flex; gap: 4px; min-height: 34px; padding: 2px 4px 2px 10px; }
-.conv:hover, .conv--active, .conv--confirm { background: var(--agent-surface-alt); }
-.conv-link { background: none; border: 0; color: inherit; cursor: pointer; flex: 1; font: inherit; font-size: 13px; min-width: 0; overflow: hidden; padding: 6px 0; text-align: left; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
-.conv-link:focus-visible { outline: 2px solid var(--agent-primary); outline-offset: 2px; }
-.conv--active .conv-link { color: var(--agent-primary); font-weight: 500; }
-.conv-when { color: var(--agent-muted); flex: none; font-size: 11px; }
-.conv .btn--icon { height: 26px; min-height: 26px; width: 26px; }
-.conv-del { display: none; }
-.conv:hover .conv-when, .conv:focus-within .conv-when { display: none; }
-.conv:hover .conv-del, .conv:focus-within .conv-del { display: inline-flex; }
-/* Touch screens can't hover: always offer Delete there. */
-@media (hover: none) { .conv-when { display: none; } .conv-del { display: inline-flex; } }
-.btn--danger { background: var(--agent-error); color: #fff; }
+.convs .conv-list { flex: 1; min-height: 0; overflow-y: auto; }
 
 .head { border-bottom: 1px solid var(--agent-border); gap: 10px; padding: 8px 16px; }
 .title { background: none; border: 0; border-radius: 6px; color: inherit; cursor: text; font: inherit; font-size: 15px; font-weight: 600; max-width: 100%; min-width: 0; overflow: hidden; padding: 4px 6px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
@@ -94,17 +61,6 @@ const PAGE_STYLES = `
 @media (prefers-reduced-motion: reduce) { .convs, .page--drawer .convs { transition: none; } }
 `;
 
-// Same day: the time; otherwise the date.
-function defaultFormatDate(value) {
-  const date = new Date(value);
-  if (!value || Number.isNaN(date.getTime())) return '';
-  const now = new Date();
-  if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  const opts = { month: 'short', day: 'numeric' };
-  if (date.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
-  return date.toLocaleDateString([], opts);
-}
-
 export class AgentPageElement extends AgentPanelElement {
   static tagName = 'agent-page';
 
@@ -113,23 +69,15 @@ export class AgentPageElement extends AgentPanelElement {
   static defaultLabels = { ...AgentPanelElement.defaultLabels, ...PAGE_LABELS };
 
   static get observedAttributes() {
-    return [...super.observedAttributes, 'active', 'renamable', 'no-sidebar'];
+    return [...super.observedAttributes, 'renamable', 'no-sidebar'];
   }
+
+  // The sidebar shows the conversation list, so the panel's switcher stays off.
+  static conversationSwitcher = false;
 
   // ---- Properties -------------------------------------------------------------------
 
-  // The sidebar list: [{ id, title, updated?, href? }]. With `href`, rows are real links.
-  get conversations() { return this._page.conversations.slice(); }
-
-  set conversations(value) {
-    this._page.conversations = Array.isArray(value) ? value.filter((c) => c && c.id != null) : [];
-    this._schedule();
-  }
-
-  // The id of the open conversation (reflects the `active` attribute).
-  get active() { return this.getAttribute('active') || ''; }
-
-  set active(value) { this._reflect('active', value == null ? '' : String(value)); }
+  // `conversations`, `active`, `hasMore` and `formatDate` come from the panel.
 
   get renamable() { return this.hasAttribute('renamable'); }
 
@@ -140,14 +88,6 @@ export class AgentPageElement extends AgentPanelElement {
 
   set contextReferences(value) {
     this._page.context = Array.isArray(value) ? value.filter((r) => r && r.type != null && r.id != null) : [];
-    this._schedule();
-  }
-
-  // (value) => string for the dates in the sidebar.
-  get formatDate() { return this._page.formatDate; }
-
-  set formatDate(fn) {
-    this._page.formatDate = typeof fn === 'function' ? fn : defaultFormatDate;
     this._schedule();
   }
 
@@ -171,9 +111,7 @@ export class AgentPageElement extends AgentPanelElement {
   // Called from the panel's constructor, before any subclass fields exist: keep state
   // in this._page, created here.
   layout(panel) {
-    this._page = {
-      conversations: [], context: [], formatDate: defaultFormatDate, confirming: '', renaming: false, drawer: false,
-    };
+    this._page = { context: [], renaming: false, drawer: false };
 
     this.$history = h('button', { type: 'button', class: 'btn btn--icon history', part: 'history', onClick: () => this._setDrawer(!this._page.drawer) }, icon('history'));
     this.$title = h('button', {
@@ -213,8 +151,8 @@ export class AgentPageElement extends AgentPanelElement {
         this._emit('agent-new-conversation');
       },
     }, icon('plus', 16), h('span'));
-    this.$convEmpty = h('p', { class: 'conv-empty' });
-    this.$convList = h('div', { class: 'conv-list', part: 'conversation-list' });
+    // The panel's conversation rows (created before layout runs), shown in the sidebar.
+    this.$convList = this._convList.el;
     this.$sidebar = h(
       'aside',
       { class: 'convs', part: 'sidebar' },
@@ -235,7 +173,7 @@ export class AgentPageElement extends AgentPanelElement {
   }
 
   connectedCallback() {
-    this._upgradeProperties(['conversations', 'active', 'renamable', 'contextReferences', 'formatDate']);
+    this._upgradeProperties(['renamable', 'contextReferences']);
     super.connectedCallback();
   }
 
@@ -283,73 +221,10 @@ export class AgentPageElement extends AgentPanelElement {
     this._render();
   }
 
-  _select(conversation, e) {
-    // Modifier and non-left clicks are the browser's (new tab on links); they select nothing.
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const href = safeHref(conversation.href);
-    const accepted = this._emit('agent-select-conversation', { id: conversation.id, conversation }, { cancelable: true });
-    if (!accepted || !href) e.preventDefault();
-    this._page.confirming = '';
+  _onConversationSelect(conversation, e) {
+    if (!super._onConversationSelect(conversation, e)) return false;
     this._setDrawer(false);
-  }
-
-  _focusRow(id, selector) {
-    const row = Array.from(this.$convList.children).find((el) => el.dataset.conversationId === id);
-    row?.querySelector(selector)?.focus();
-  }
-
-  _renderConversation(conversation) {
-    const labels = this.labels;
-    const id = String(conversation.id);
-    const title = conversation.title || labels.untitled;
-    const confirming = this._page.confirming === id;
-    const href = safeHref(conversation.href);
-    const link = href
-      ? h('a', { class: 'conv-link', href, title })
-      : h('button', { type: 'button', class: 'conv-link', title });
-    link.textContent = title;
-    if (id === this.active) link.setAttribute('aria-current', 'page');
-    link.addEventListener('click', (e) => this._select(conversation, e));
-    const tail = confirming
-      ? [
-        h('button', {
-          type: 'button',
-          class: 'btn btn--danger btn--sm',
-          'data-action': 'confirm-delete',
-          onClick: () => {
-            this._page.confirming = '';
-            this._emit('agent-delete-conversation', { id: conversation.id, conversation });
-            this._schedule();
-          },
-        }, labels.delete),
-        h('button', {
-          type: 'button',
-          class: 'btn btn--icon',
-          'aria-label': labels.cancel,
-          onClick: () => {
-            this._page.confirming = '';
-            this._render();
-            this._focusRow(id, '.conv-link');
-          },
-        }, icon('close', 14)),
-      ]
-      : [
-        h('span', { class: 'conv-when' }, conversation.updated ? this._page.formatDate(conversation.updated) : ''),
-        h('button', {
-          type: 'button',
-          class: 'btn btn--icon conv-del',
-          'aria-label': labels.deleteConversation(title),
-          'data-action': 'delete',
-          onClick: () => {
-            this._page.confirming = id;
-            this._render();
-            this._focusRow(id, '[data-action="confirm-delete"]');
-          },
-        }, icon('delete', 15)),
-      ];
-    return h('div', {
-      class: ['conv', id === this.active && 'conv--active', confirming && 'conv--confirm'], part: 'conversation', 'data-conversation-id': id,
-    }, link, tail);
+    return true;
   }
 
   _render() {
@@ -370,17 +245,7 @@ export class AgentPageElement extends AgentPanelElement {
     this.$newChat.lastChild.textContent = labels.newChat;
 
     const page = this._page;
-    const { conversations, context } = page;
-    this.$convEmpty.textContent = labels.noConversations;
-    // Rows are rebuilt only when what they show changes, so focus and clicks in the
-    // sidebar survive redraws caused by the transcript.
-    const listKey = dataKey([conversations, this.active, page.confirming, conversations.map((c) => (c.updated ? page.formatDate(c.updated) : ''))]);
-    if (listKey !== page.listKey || labels !== page.listLabels) {
-      page.listKey = listKey;
-      page.listLabels = labels;
-      this.$convList.replaceChildren(...(conversations.length ? conversations.map((c) => this._renderConversation(c)) : [this.$convEmpty]));
-    }
-
+    const { context } = page;
     this.$contextBar.hidden = !context.length;
     this.$contextLabel.textContent = labels.inContext;
     const contextKey = dataKey(context);

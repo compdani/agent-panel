@@ -44,6 +44,32 @@ button { font: inherit; }
 .subhead { padding: 0 14px 10px; }
 .spacer { flex: 1; }
 
+/* Conversation rows: <agent-page>'s sidebar and <agent-panel>'s switcher. */
+.conv-empty { color: var(--agent-muted); font-size: 12px; margin: 0; padding: 8px; }
+.conv { align-items: center; border-radius: 6px; display: flex; gap: 4px; min-height: 34px; padding: 2px 4px 2px 10px; }
+.conv:hover, .conv--active, .conv--confirm { background: var(--agent-surface-alt); }
+.conv-link { background: none; border: 0; color: inherit; cursor: pointer; flex: 1; font: inherit; font-size: 13px; min-width: 0; overflow: hidden; padding: 6px 0; text-align: left; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.conv-link:focus-visible { outline: 2px solid var(--agent-primary); outline-offset: 2px; }
+.conv--active .conv-link { color: var(--agent-primary); font-weight: 500; }
+.conv-when { color: var(--agent-muted); flex: none; font-size: 11px; }
+.conv .btn--icon { height: 26px; min-height: 26px; width: 26px; }
+.conv-del { display: none; }
+.conv:hover .conv-when, .conv:focus-within .conv-when { display: none; }
+.conv:hover .conv-del, .conv:focus-within .conv-del { display: inline-flex; }
+/* Touch screens can't hover: always offer Delete there. */
+@media (hover: none) { .conv-when { display: none; } .conv-del { display: inline-flex; } }
+.conv-more { color: var(--agent-primary); margin: 4px 0; width: 100%; }
+.btn--danger { background: var(--agent-error); color: #fff; }
+
+/* <agent-panel conversations-menu>: the open conversation, a list of the others, New chat. */
+.switcher { align-items: center; display: flex; gap: 4px; padding: 0 8px 8px 14px; position: relative; }
+.switch-btn { align-items: center; background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 8px; color: inherit; cursor: pointer; display: flex; flex: 1; font: inherit; font-size: 13px; gap: 8px; min-height: 34px; min-width: 0; padding: 4px 8px 4px 10px; text-align: left; }
+.switch-btn:hover { background: var(--agent-surface-alt); }
+.switch-btn:focus-visible { outline: 2px solid var(--agent-primary); outline-offset: 1px; }
+.switch-btn .icon { color: var(--agent-muted); }
+.switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switch-pop { background: var(--agent-surface); border: 1px solid var(--agent-border); border-radius: 8px; box-shadow: 0 5px 5px -3px rgba(0, 0, 0, .2), 0 8px 10px 1px rgba(0, 0, 0, .14), 0 3px 14px 2px rgba(0, 0, 0, .12); left: 14px; max-height: min(420px, 60vh); overflow-y: auto; padding: 4px; position: absolute; right: 8px; top: calc(100% - 4px); z-index: 25; }
+
 .scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .inner { display: flex; flex-direction: column; gap: 12px; min-height: 100%; padding: 16px; }
 .list { display: flex; flex-direction: column; gap: 12px; }

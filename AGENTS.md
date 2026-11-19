@@ -133,6 +133,10 @@ declare class AgentPanelElement extends HTMLElement {
   readonly limits: Limits;
   error: string;                  // reflects the `error` attribute ('' removes it)
   running: boolean; disabled: boolean; closable: boolean; // reflect boolean attributes
+  conversations: Conversation[];  // returns a copy; items without id are dropped (0.4.0: on the panel too)
+  active: string;                 // reflects `active`
+  hasMore: boolean;               // reflects `has-more`: the list ends with "Load more"
+  formatDate: (value) => string;  // non-functions restore the built-in format
   models: ModelChoice[];          // setter takes strings too; [] hides the model menu
   model: string;                  // '' = default
   options: AgentOption[];         // [] hides the options menu
@@ -377,6 +381,26 @@ negative, blank or not a number falls back to its default.
   wrapper is `position: static` and is hidden while no mention is open. Host pickers
   position themselves against the box, e.g. `position: absolute; bottom: 100%`.
 
+### Conversations (0.4.0)
+
+- **CV1.** `conversations`, `active`, `hasMore` (`has-more`) and `formatDate` live on the
+  panel; the page inherits them. Both draw the same rows (`ConversationList` in
+  `agent-panel.js`), so P3, P4 and P7 hold for the page's sidebar and the panel's
+  switcher alike.
+- **CV2.** With `has-more`, the list ends with a "Load more" button (`part="load-more"`,
+  `labels.loadMore`) that fires `agent-load-more`. The element never fetches or appends
+  rows itself.
+- **CV3.** `<agent-panel conversations-menu>` shows a switcher row under the header
+  (`part="switcher"`): a button with the active row's title (`labels.untitled` when it
+  has none, or when `active` matches no row) that opens a dropdown (`part="switcher-menu"`)
+  with the rows, and a New chat button (`part="switcher-new"`, fires
+  `agent-new-conversation`). Opening focuses the active row (or the first); ArrowUp/Down
+  move between rows; Escape closes and refocuses the button; a press outside closes it;
+  choosing a row closes it. A confirmed delete keeps it open. `openConversations()` /
+  `closeConversations()` do the same from code, and opening closes a composer menu.
+- **CV4.** `static conversationSwitcher` (default `true`) gates CV3. `<agent-page>` sets
+  it to `false`: its sidebar shows the list.
+
 ### Page
 
 - **P1.** The layout is a grid of the sidebar (`--agent-sidebar-width`) and the panel. The
@@ -492,9 +516,10 @@ menu cards. Each is optional and has defaults:
 | `agent-menu-select` | `{ id, item }` | yes | A "+" menu item is picked (MN1) |
 | `agent-model-change` | `{ model, previous }` | yes | A model is picked (MN2) |
 | `agent-option-change` | `{ id, value, values }` | yes | An option is changed or reset (MN3) |
-| Page: `agent-select-conversation` | `{ id, conversation }` | yes | Left click on a row (P3) |
-| Page: `agent-new-conversation` | `null` | no | New chat button |
-| Page: `agent-delete-conversation` | `{ id, conversation }` | no | Confirmed delete (P4) |
+| `agent-select-conversation` | `{ id, conversation }` | yes | Left click on a row (P3), sidebar or switcher |
+| `agent-new-conversation` | `null` | no | New chat button (sidebar or switcher) |
+| `agent-delete-conversation` | `{ id, conversation }` | no | Confirmed delete (P4), sidebar or switcher |
+| `agent-load-more` | `null` | no | "Load more" at the end of the list (CV2) |
 | Page: `agent-rename` | `{ title }` | yes | Committed title edit (P5) |
 
 ### Slots
@@ -511,16 +536,16 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 
 - **Parts**: `panel header heading close subheader transcript entries empty suggestion
   bubble message tools error composer attachments attachment reference mention input attach
-  hint send stop drop add-menu model-menu options-menu menu`. The page adds `page sidebar new-chat conversation-list conversation
-  history title title-input context-bar`.
+  hint send stop drop add-menu model-menu options-menu menu switcher switcher-button
+  switcher-menu switcher-new conversation-list conversation load-more`. The page adds
+  `page sidebar new-chat history title title-input context-bar`.
 - **Tokens** (defaults in `styles.js`): `--agent-primary --agent-on-primary
   --agent-surface --agent-surface-alt --agent-text --agent-muted --agent-border
   --agent-error --agent-success --agent-warning --agent-info --agent-font-size
   --agent-radius --agent-composer-max-height`. The page adds `--agent-sidebar-width`
   (250px) and `--agent-content-max-width` (860px).
 - **Reusable classes in the shadow root**: `btn btn--primary btn--tonal btn--icon btn--sm
-  chip card badge alert tone-{success,error,warning,info,muted} spinner`. The page adds
-  `btn--danger`.
+  chip card badge alert tone-{success,error,warning,info,muted} spinner btn--danger`.
 
 ## 7. Recipes
 
@@ -671,3 +696,16 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - `focus()` on the rich-text editor puts the caret at the end when it wasn't already in
   the editor (a focused contenteditable otherwise starts at the beginning), so text typed
   after `addReference()` or `openMention()` lands after the draft, as in the textarea.
+
+## 0.4.0 conversations on the panel
+
+- `conversations`, `active`, `hasMore` and `formatDate` moved from the page to the panel
+  (CV1). The page's API is unchanged; its conversation `labels` keys moved to the base
+  `Labels` too (`PageLabels` keeps `inContext`, `rename`, `titleLabel`).
+- New: `has-more` / `hasMore` and the `agent-load-more` event (CV2), on both tags.
+- New: `<agent-panel conversations-menu>`, a conversation switcher for side panels (CV3),
+  with `openConversations()` / `closeConversations()` and the `switcher*` parts.
+- New exports from `agent-panel.js`: `safeHref` and `defaultFormatDate`.
+- Minor version: the conversation row styles and `btn--danger` moved from the page's
+  stylesheet to the base one, so `::part(conversation)` styles now also reach the
+  panel's switcher rows.

@@ -6,7 +6,7 @@ React, Svelte, Angular or plain HTML.
 
 | Element | Import | For |
 |---|---|---|
-| `<agent-panel>` | `agent-panel` | A compact chat, e.g. in a side panel |
+| `<agent-panel>` | `agent-panel` | A compact chat, e.g. in a side panel. With `conversations-menu`, it has a conversation switcher. See [Conversations in the panel](#conversations-in-the-panel) |
 | `<agent-page>` | `agent-panel/page` | A full-page chat with a conversation list, a renamable title and an "in context" bar. See [The agent page](#the-agent-page) |
 
 Each import defines only its own element, so you can use either one without the other.
@@ -44,7 +44,7 @@ sends something.
 13. [Slots](#slots)
 14. [Styling](#styling)
 15. [Extending the panel](#extending-the-panel)
-16. [The agent page](#the-agent-page)
+16. [The agent page](#the-agent-page) and [conversations in the panel](#conversations-in-the-panel)
 17. [Using it from a framework](#using-it-from-a-framework)
 18. [Accessibility](#accessibility)
 19. [Browser support and limits](#browser-support-and-limits)
@@ -151,6 +151,9 @@ same name.
 |---|---|---|---|
 | `heading` | string | `""` | Title in the header. Hidden if the `header-start` slot is used. |
 | `closable` | boolean | off | Shows a close button that fires `agent-close`. *Reflected.* |
+| `conversations-menu` | boolean | off | Shows the conversation switcher under the header. See [Conversations in the panel](#conversations-in-the-panel). |
+| `active` | string | | The id of the open conversation. *Reflected.* |
+| `has-more` | boolean | off | Ends the conversation list with "Load more", which fires `agent-load-more`. *Reflected.* |
 | `placeholder` | string | `""` | Placeholder text in the composer. Also used as its accessible label. |
 | `hint` | string | `""` | Small text next to the composer buttons. Hidden when the panel is narrower than 380px. |
 | `empty-title` | string | `""` | Heading of the empty state. |
@@ -255,6 +258,8 @@ All events bubble and cross the shadow boundary (`composed`).
 | `agent-submit` | `{ text, attachments, references, fromDraft, model, options }` | yes | The person sends a message or clicks a suggestion. Call `preventDefault()` to keep the draft and attachments, for example when you can't send right now. |
 | `agent-stop` | — | no | The Stop button is pressed. |
 | `agent-close` | — | no | The close button is pressed. The panel doesn't hide itself. |
+| `agent-select-conversation`, `agent-new-conversation`, `agent-delete-conversation` | see [Page events](#page-events) | | From the switcher (`conversations-menu`) or the page's sidebar. |
+| `agent-load-more` | — | no | "Load more" is pressed (shown while `has-more` is set). Fetch the next page and set `conversations`. |
 | `agent-action` | `{ action, ...}` | yes | A button in a custom entry called `emitAction()`. |
 | `agent-attachments-change` | `{ attachments }` | no | Files are added or removed. |
 | `agent-attachment-error` | `{ problems: string[] }` | no | One or more files were refused. |
@@ -639,6 +644,29 @@ As with the panel, the page holds no data of its own: you set `conversations`, `
 (attributes, properties, methods, events, slots, references, mentions) works the same on
 the page.
 
+### Conversations in the panel
+
+`<agent-panel>` can carry the same conversation list for side panels: add
+`conversations-menu` and it shows a switcher under the header, with the open
+conversation's title, a dropdown of the others (each with Delete, which asks once), and a
+New chat button. It takes the same `conversations`, `active`, `has-more` and `formatDate`
+as the page, and fires the same events.
+
+```js
+panel.setAttribute('conversations-menu', '');
+panel.conversations = [{ id: 'c1', title: 'Spring launch', updated: '2026-11-10T09:00:00Z' }];
+panel.active = 'c1';
+panel.hasMore = true; // the list ends with "Load more"
+panel.addEventListener('agent-select-conversation', (e) => { e.preventDefault(); open(e.detail.id); });
+panel.addEventListener('agent-new-conversation', () => startNewChat());
+panel.addEventListener('agent-delete-conversation', (e) => api.delete(e.detail.id));
+panel.addEventListener('agent-load-more', () => loadNextPage());
+```
+
+`openConversations()` and `closeConversations()` open and close the dropdown from code.
+Parts: `switcher`, `switcher-button`, `switcher-menu`, `switcher-new`, plus the list's
+`conversation-list`, `conversation` and `load-more`.
+
 ### Page attributes and properties
 
 | Name | Type | Description |
@@ -647,6 +675,7 @@ the page.
 | `renamable` | boolean | Clicking the title edits it. Enter or leaving the field saves; Escape cancels. Saving fires `agent-rename`. |
 | `active` | string | The id of the open conversation, highlighted in the list. *Reflected.* |
 | `no-sidebar` (attribute) | boolean | Hides the conversation list. |
+| `has-more` (attribute) | boolean | Ends the list with "Load more", which fires `agent-load-more`. *Reflected* as `hasMore`. |
 | `conversations` (property) | `[{ id, title, updated?, href? }]` | The list. With `href`, rows are real links, so they can be opened in a new tab. Only relative and HTTP(S) links are used; others (`javascript:`, `data:`…) are dropped and the row becomes a button. |
 | `contextReferences` (property) | `Reference[]` | References already part of the conversation, shown in the "in context" bar under the header. Hidden while empty. |
 | `formatDate` (property) | `(value) => string` | Formats `updated` in the list. By default, today's dates show the time and other dates show the day. |
@@ -665,6 +694,7 @@ the page.
 | `agent-select-conversation` | `{ id, conversation }` | yes | A conversation in the list is clicked. Cancel it to handle navigation yourself; otherwise a row with `href` follows its link. Clicks that open a new tab (Ctrl, ⌘, middle click) aren't reported. |
 | `agent-new-conversation` | — | no | The New chat button is pressed. |
 | `agent-delete-conversation` | `{ id, conversation }` | no | A deletion was confirmed. Each row asks once before firing this. The page doesn't remove the row: update `conversations`. |
+| `agent-load-more` | — | no | "Load more" at the end of the list was pressed (only while `has-more` is set). |
 | `agent-rename` | `{ title }` | yes | The title was edited. If the event isn't cancelled, the page shows the new title straight away. |
 
 ### Page slots
@@ -678,6 +708,7 @@ conversation list. Put things like a model picker in `header-actions`.
 |---|---|
 | `newChat` | `New chat` |
 | `untitled` | `New chat` |
+| `loadMore` | `Load more` |
 | `conversations` | `Conversations` (the sidebar's and history button's names) |
 | `noConversations` | `No conversations yet.` |
 | `delete` | `Delete` |
@@ -976,6 +1007,15 @@ The host must validate actual files, API limits and model compatibility on its s
 - Drops keep distinct files that share a name, size, type and date.
 - OpenAI helpers send the normalized URL, refuse URLs with credentials, prefer an explicit
   `mimeType` over the extension, and keep `type: 'asset'` whatever the upload returns.
+
+## New in 0.4.0
+
+- `<agent-panel conversations-menu>`: a conversation switcher for side panels. See
+  [Conversations in the panel](#conversations-in-the-panel).
+- `has-more` and `agent-load-more` on both elements, so hosts no longer draw their own
+  "Load more" button.
+- `conversations`, `active` and `formatDate` now live on the panel; the page's API is the
+  same.
 
 ## New in 0.3.0
 

@@ -47,3 +47,12 @@ const pageModels: ModelChoice[] = [{ id: 'x' }];
 const pageOptions: AgentOption[] = [{ id: 'y' }];
 const pageItems: AddMenuItem[] = [{ id: 'z', label: 'Z' }];
 page.models = pageModels; page.options = pageOptions; page.addMenu = pageItems;
+
+panel.conversations = [{ id: 'c1', title: 'One', updated: new Date() }];
+panel.hasMore = true;
+panel.active = 'c1';
+panel.openConversations();
+panel.addEventListener('agent-load-more', () => panel.closeConversations());
+panel.addEventListener('agent-delete-conversation', e => { const id: string | number = e.detail.id; });
+page.addEventListener('agent-load-more', () => { page.hasMore = false; });
+const loadMoreLabel: string = panel.labels.loadMore;

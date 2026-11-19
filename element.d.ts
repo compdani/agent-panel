@@ -81,13 +81,19 @@ export interface Labels {
   attachLink: string;
   cancel: string;
   close: string;
+  conversations: string;
   defaultModel: string;
   defaultModelNamed(name: string): string;
+  delete: string;
+  deleteConversation(title: string): string;
   dismiss: string;
   drop: string;
   invalidLink: string;
   linkUrl: string;
+  loadMore: string;
   model: string;
+  newChat: string;
+  noConversations: string;
   noModels: string;
   options: string;
   pasteContent: string;
@@ -98,8 +104,18 @@ export interface Labels {
   searchModels: string;
   send: string;
   stop: string;
+  untitled: string;
   working: string;
   usedTools(n: number): string;
+}
+
+/** A row in the conversation list (the page's sidebar, the panel's switcher). */
+export interface Conversation {
+  id: string | number;
+  title?: string;
+  updated?: string | number | Date;
+  /** With `href`, the row is a real link. */
+  href?: string;
 }
 
 /** A choice in the model menu. Strings are shorthand for `{ id }`. */
@@ -173,6 +189,12 @@ export interface AgentPanelEventMap {
   'agent-option-change': CustomEvent<{ id: string | null; value: unknown; values: Record<string, unknown> }>;
   /** Cancelable: cancelling skips the built-in action (file picker, paste form, adding `reference`…). */
   'agent-menu-select': CustomEvent<{ id: string; item: AddMenuItem }>;
+  /** Cancelable: cancelling keeps a row with `href` from following its link. */
+  'agent-select-conversation': CustomEvent<{ id: Conversation['id']; conversation: Conversation }>;
+  'agent-new-conversation': CustomEvent<null>;
+  'agent-delete-conversation': CustomEvent<{ id: Conversation['id']; conversation: Conversation }>;
+  /** The list's "Load more" button (shown while `hasMore`). */
+  'agent-load-more': CustomEvent<null>;
 }
 
 export type IconName =
@@ -189,6 +211,8 @@ export declare class AgentPanelElement extends HTMLElement {
   static define<T extends typeof AgentPanelElement>(this: T, tag?: string, registry?: CustomElementRegistry): T;
   static readAsBase64(file: Blob): Promise<string>;
   static defaultLabels: Labels;
+  /** Whether `conversations-menu` shows the switcher. `false` on `<agent-page>`. */
+  static conversationSwitcher: boolean;
 
   /** Non-array values become `[]`. */
   entries: Entry[];
@@ -211,6 +235,14 @@ export declare class AgentPanelElement extends HTMLElement {
   running: boolean;
   disabled: boolean;
   closable: boolean;
+  /** Items without `id` are dropped. Returns a copy. */
+  conversations: Conversation[];
+  /** Reflects the `active` attribute. */
+  active: string;
+  /** Reflects the `has-more` attribute: the list ends with "Load more". */
+  hasMore: boolean;
+  /** Non-functions restore the built-in format. */
+  formatDate: (value: unknown) => string;
   /** The model menu; empty hides it. Returns a copy with ids as strings. */
   get models(): ModelChoice[];
   set models(value: Array<string | ModelChoice> | null | undefined);
@@ -226,6 +258,9 @@ export declare class AgentPanelElement extends HTMLElement {
   get addMenu(): Array<BuiltInAddItem | AddMenuItem>;
   set addMenu(value: Array<BuiltInAddItem | AddMenuItem> | null | undefined);
 
+  /** Opens the conversation switcher (only with `conversations-menu`). */
+  openConversations(): void;
+  closeConversations(): void;
   submit(text?: string): boolean;
   clearComposer(options?: ClearComposerOptions): void;
   addFiles(files: Iterable<File> | ArrayLike<File>, opts?: { pasted?: boolean }): { added: Attachment[]; problems: string[] };
@@ -264,6 +299,11 @@ export declare class AgentPanelElement extends HTMLElement {
   removeEventListener<K extends keyof HTMLElementEventMap>(type: K, listener: (this: this, ev: HTMLElementEventMap[K]) => unknown, options?: boolean | EventListenerOptions): void;
   removeEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions): void;
 }
+
+/** The href itself if it is relative or HTTP(S); `''` otherwise. */
+export declare function safeHref(href: unknown): string;
+/** Today: the time. Otherwise the date (with the year when it isn't this year). */
+export declare function defaultFormatDate(value: unknown): string;
 
 /** `${type}:${id}`, the identity references are deduplicated by. */
 export declare function referenceKey(ref: Pick<Reference, 'type' | 'id'>): string;

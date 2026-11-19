@@ -26,13 +26,19 @@ const DEFAULT_LABELS = {
   attachLink: 'Attach link',
   cancel: 'Cancel',
   close: 'Close',
+  conversations: 'Conversations',
   defaultModel: 'Default',
   defaultModelNamed: (name) => `Default (${name})`,
+  delete: 'Delete',
+  deleteConversation: (title) => `Delete ${title}`,
   dismiss: 'Dismiss',
   drop: 'Drop files to attach',
   invalidLink: 'Enter a link that starts with http:// or https://',
   linkUrl: 'Link',
+  loadMore: 'Load more',
   model: 'Model',
+  newChat: 'New chat',
+  noConversations: 'No conversations yet.',
   noModels: 'No matching models',
   options: 'Options',
   pasteContent: 'Text to attach',
@@ -43,6 +49,7 @@ const DEFAULT_LABELS = {
   searchModels: 'Search models',
   send: 'Send',
   stop: 'Stop',
+  untitled: 'New chat',
   usedTools: (n) => `Used ${n} tools`,
   working: 'Working',
 };
@@ -163,6 +170,132 @@ function dataKey(value) {
   }
 }
 
+// Conversation links may be relative or HTTP(S); anything else (javascript:, data:…) is
+// dropped, and the row becomes a button.
+export function safeHref(href) {
+  if (href == null) return '';
+  // Read the scheme the way the URL parser does: tabs and newlines removed, and
+  // leading/trailing controls and spaces trimmed (so "java\tscript:" is still caught).
+  const raw = String(href);
+  const clean = raw.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
+  if (!clean) return '';
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(clean);
+  if (!scheme) return raw; // Relative.
+  return ['http', 'https'].includes(scheme[1].toLowerCase()) ? raw : '';
+}
+
+// Same day: the time; otherwise the date.
+export function defaultFormatDate(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const opts = { month: 'short', day: 'numeric' };
+  if (date.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return date.toLocaleDateString([], opts);
+}
+
+// The conversation rows shared by <agent-page>'s sidebar and <agent-panel>'s switcher: a
+// title (a real link when the row has a safe href), its date, a Delete that asks once, and
+// a "Load more" button while `hasMore` is set. The host element owns the data.
+class ConversationList {
+  constructor(host) {
+    this.host = host;
+    this.confirming = '';
+    this.key = null;
+    this.labels = null;
+    this.$empty = h('p', { class: 'conv-empty' });
+    this.$more = h('button', {
+      type: 'button', class: 'btn btn--sm conv-more', part: 'load-more', onClick: () => host._emit('agent-load-more'),
+    });
+    this.el = h('div', { class: 'conv-list', part: 'conversation-list' });
+  }
+
+  // Rows are rebuilt only when what they show changes, so focus and clicks in the list
+  // survive redraws caused by the transcript.
+  render() {
+    const host = this.host;
+    const labels = host.labels;
+    const list = host._conversations;
+    const format = host._formatDate;
+    const more = host.hasMore;
+    const key = dataKey([list, host.active, this.confirming, more, list.map((c) => (c.updated ? format(c.updated) : ''))]);
+    if (key === this.key && labels === this.labels) return;
+    this.key = key;
+    this.labels = labels;
+    this.$empty.textContent = labels.noConversations;
+    this.$more.textContent = labels.loadMore;
+    this.el.replaceChildren(...(list.length ? list.map((c) => this.row(c)) : [this.$empty]), ...(more ? [this.$more] : []));
+  }
+
+  // The row to focus when the list opens: the open conversation, else the first one.
+  focusTarget() {
+    return this.el.querySelector('[aria-current="page"]') || this.el.querySelector('.conv-link, .conv-more');
+  }
+
+  focusRow(id, selector) {
+    const row = Array.from(this.el.children).find((el) => el.dataset.conversationId === id);
+    row?.querySelector(selector)?.focus();
+  }
+
+  row(conversation) {
+    const host = this.host;
+    const labels = host.labels;
+    const id = String(conversation.id);
+    const title = conversation.title || labels.untitled;
+    const confirming = this.confirming === id;
+    const active = id === host.active;
+    const href = safeHref(conversation.href);
+    const link = href
+      ? h('a', { class: 'conv-link', href, title })
+      : h('button', { type: 'button', class: 'conv-link', title });
+    link.textContent = title;
+    if (active) link.setAttribute('aria-current', 'page');
+    link.addEventListener('click', (e) => host._onConversationSelect(conversation, e));
+    const tail = confirming
+      ? [
+        h('button', {
+          type: 'button',
+          class: 'btn btn--danger btn--sm',
+          'data-action': 'confirm-delete',
+          onClick: () => {
+            this.confirming = '';
+            host._emit('agent-delete-conversation', { id: conversation.id, conversation });
+            this.render();
+            host._afterConversationDelete();
+          },
+        }, labels.delete),
+        h('button', {
+          type: 'button',
+          class: 'btn btn--icon',
+          'aria-label': labels.cancel,
+          onClick: () => {
+            this.confirming = '';
+            this.render();
+            this.focusRow(id, '.conv-link');
+          },
+        }, icon('close', 14)),
+      ]
+      : [
+        h('span', { class: 'conv-when' }, conversation.updated ? host._formatDate(conversation.updated) : ''),
+        h('button', {
+          type: 'button',
+          class: 'btn btn--icon conv-del',
+          'aria-label': labels.deleteConversation(title),
+          'data-action': 'delete',
+          onClick: () => {
+            this.confirming = id;
+            this.render();
+            this.focusRow(id, '[data-action="confirm-delete"]');
+          },
+        }, icon('delete', 15)),
+      ];
+    return h('div', {
+      class: ['conv', active && 'conv--active', confirming && 'conv--confirm'], part: 'conversation', 'data-conversation-id': id,
+    }, link, tail);
+  }
+}
+
 const MENTION_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape']);
 
 let nextId = 0;
@@ -179,7 +312,7 @@ export class AgentPanelElement extends Base {
   static get observedAttributes() {
     return ['heading', 'placeholder', 'hint', 'empty-title', 'empty-text', 'running', 'disabled', 'closable',
       'no-attachments', 'accept', 'error', 'allow-empty-text', 'mention-trigger', 'no-add-menu', 'default-model', 'no-default-model',
-      'plain-text'];
+      'plain-text', 'active', 'has-more', 'conversations-menu'];
   }
 
   static define(tag = this.tagName, registry = globalThis.customElements) {
@@ -188,6 +321,10 @@ export class AgentPanelElement extends Base {
   }
 
   static readAsBase64 = readAsBase64;
+
+  // Whether the `conversations-menu` attribute shows the conversation switcher under the
+  // header. <agent-page> turns it off: its sidebar shows the same list.
+  static conversationSwitcher = true;
 
   constructor() {
     super();
@@ -212,6 +349,9 @@ export class AgentPanelElement extends Base {
     this._optionValues = {};
     this._addMenu = null;
     this._menu = null; // { name: 'add' | 'model' | 'options', view, query } while one is open
+    this._conversations = [];
+    this._formatDate = defaultFormatDate;
+    this._switcherOpen = false;
     this.attachShadow({ mode: 'open' });
     this._build();
   }
@@ -359,6 +499,34 @@ export class AgentPanelElement extends Base {
 
   set disabled(value) { this.toggleAttribute('disabled', Boolean(value)); }
 
+  // The conversation list: [{ id, title, updated?, href? }]. <agent-page> shows it in its
+  // sidebar; <agent-panel> shows it in the switcher when `conversations-menu` is set.
+  get conversations() { return this._conversations.slice(); }
+
+  set conversations(value) {
+    this._conversations = Array.isArray(value) ? value.filter((c) => c && c.id != null) : [];
+    this._schedule();
+  }
+
+  // The id of the open conversation (reflects the `active` attribute).
+  get active() { return this.getAttribute('active') || ''; }
+
+  set active(value) { this._reflect('active', value == null ? '' : String(value)); }
+
+  // More conversations exist than `conversations` holds: the list ends with "Load more",
+  // which fires `agent-load-more` (reflects the `has-more` attribute).
+  get hasMore() { return this.hasAttribute('has-more'); }
+
+  set hasMore(value) { this.toggleAttribute('has-more', Boolean(value)); }
+
+  // (value) => string for the dates in the conversation list.
+  get formatDate() { return this._formatDate; }
+
+  set formatDate(fn) {
+    this._formatDate = typeof fn === 'function' ? fn : defaultFormatDate;
+    this._schedule();
+  }
+
   get closable() { return this.hasAttribute('closable'); }
 
   set closable(value) { this.toggleAttribute('closable', Boolean(value)); }
@@ -366,6 +534,11 @@ export class AgentPanelElement extends Base {
   // ---- Methods ----------------------------------------------------------------------
 
   // Renders entries of `type` with fn(entry, panel) => Node, without subclassing.
+  // Opens or closes the conversation switcher (only while `conversations-menu` is set).
+  openConversations() { this._setSwitcher(true); }
+
+  closeConversations() { this._setSwitcher(false); }
+
   defineEntry(type, fn) {
     if (typeof fn === 'function') this._renderers.set(type, fn);
     else this._renderers.delete(type);
@@ -643,7 +816,7 @@ export class AgentPanelElement extends Base {
   connectedCallback() {
     // Properties set before the element was defined shadow the accessors; replay them.
     this._upgradeProperties(['entries', 'suggestions', 'markdown', 'labels', 'draft', 'references', 'error', 'running', 'disabled', 'closable',
-      'models', 'model', 'options', 'optionValues', 'addMenu']);
+      'models', 'model', 'options', 'optionValues', 'addMenu', 'conversations', 'active', 'hasMore', 'formatDate']);
     if (!this._resize && typeof ResizeObserver !== 'undefined') {
       this._resize = new ResizeObserver(() => this.scrollToBottom());
       this._resize.observe(this.$inner);
@@ -665,6 +838,7 @@ export class AgentPanelElement extends Base {
     this._resize?.disconnect();
     this._resize = null;
     if (this._menu) this._closeMenu({ focus: false });
+    this._setSwitcher(false, { focus: false });
     // A move disconnects and reconnects in one task; only release previews if it stays out.
     queueMicrotask(() => {
       if (this.isConnected || this._previewsRevoked) return;
@@ -956,7 +1130,36 @@ export class AgentPanelElement extends Base {
     this.$close = h('button', { type: 'button', class: 'btn btn--icon', part: 'close', onClick: () => this._emit('agent-close') }, icon('close'));
     this.$subhead = h('div', { class: 'subhead', part: 'subheader', hidden: true }, slot('subheader'));
     this.$head = h('div', { class: 'head' }, slot('header-start', this.$heading), h('div', { class: 'spacer' }), slot('header-actions'), this.$close);
-    this.$header = h('header', { class: 'header', part: 'header' }, this.$head, this.$subhead);
+    this._convList = new ConversationList(this);
+    this.$switchLabel = h('span', { class: 'switch-label' });
+    this.$switchButton = h('button', {
+      type: 'button',
+      class: 'switch-btn',
+      part: 'switcher-button',
+      'aria-haspopup': 'true',
+      'aria-expanded': 'false',
+      onClick: () => this._setSwitcher(!this._switcherOpen),
+      onKeydown: (e) => {
+        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !this._switcherOpen) {
+          e.preventDefault();
+          this._setSwitcher(true);
+        }
+      },
+    }, icon('history', 16), this.$switchLabel, icon('chevron-down', 16));
+    this.$switchNew = h('button', {
+      type: 'button',
+      class: 'btn btn--icon',
+      part: 'switcher-new',
+      onClick: () => {
+        this._setSwitcher(false, { focus: false });
+        this._emit('agent-new-conversation');
+      },
+    }, icon('plus'));
+    this.$switchPop = h('div', {
+      class: 'switch-pop', part: 'switcher-menu', hidden: true, onKeydown: (e) => this._onSwitcherKeydown(e),
+    }, this._convList.el);
+    this.$switcher = h('div', { class: 'switcher', part: 'switcher', hidden: true }, this.$switchButton, this.$switchNew, this.$switchPop);
+    this.$header = h('header', { class: 'header', part: 'header' }, this.$head, this.$switcher, this.$subhead);
 
     this.$emptyTitle = h('h2', { class: 'empty-title' });
     this.$emptyText = h('p', { class: 'empty-text' });
@@ -1143,12 +1346,95 @@ export class AgentPanelElement extends Base {
     });
   }
 
+  _showSwitcher() {
+    return this.constructor.conversationSwitcher && this.hasAttribute('conversations-menu');
+  }
+
+  // A row was clicked. Returns true when it counts as a selection (a plain left click),
+  // so subclasses can close their own containers. Modifier and non-left clicks are the
+  // browser's (new tab on links); they select nothing.
+  _onConversationSelect(conversation, e) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return false;
+    const href = safeHref(conversation.href);
+    const accepted = this._emit('agent-select-conversation', { id: conversation.id, conversation }, { cancelable: true });
+    if (!accepted || !href) e.preventDefault();
+    this._convList.confirming = '';
+    this._setSwitcher(false, { focus: false });
+    return true;
+  }
+
+  // After a confirmed delete the row stays until the host updates `conversations`; keep
+  // focus inside the list instead of losing it with the removed button.
+  _afterConversationDelete() {
+    if (this._switcherOpen) this._convList.focusTarget()?.focus();
+  }
+
+  _setSwitcher(open, { focus = true } = {}) {
+    const next = Boolean(open) && this._showSwitcher();
+    if (next === this._switcherOpen) return;
+    this._switcherOpen = next;
+    this._convList.confirming = '';
+    this.$switchButton.setAttribute('aria-expanded', String(next));
+    this.$switchPop.hidden = !next;
+    if (next) {
+      if (this._menu) this._closeMenu({ focus: false });
+      this._onSwitcherOutside = (e) => {
+        if (!e.composedPath().includes(this.$switcher)) this._setSwitcher(false, { focus: false });
+      };
+      document.addEventListener('pointerdown', this._onSwitcherOutside, true);
+      this._convList.render();
+      this._convList.focusTarget()?.focus();
+      return;
+    }
+    if (this._onSwitcherOutside) document.removeEventListener('pointerdown', this._onSwitcherOutside, true);
+    this._onSwitcherOutside = null;
+    if (focus && this.$switchPop.contains(this.shadowRoot.activeElement)) this.$switchButton.focus();
+  }
+
+  _onSwitcherKeydown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      this._setSwitcher(false);
+      this.$switchButton.focus();
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = Array.from(this.$switchPop.querySelectorAll('.conv-link, .conv-more'));
+    if (!items.length) return;
+    e.preventDefault();
+    const at = items.indexOf(this.shadowRoot.activeElement);
+    const step = e.key === 'ArrowDown' ? 1 : -1;
+    const next = at < 0 ? (step > 0 ? 0 : items.length - 1) : (at + step + items.length) % items.length;
+    items[next].focus();
+  }
+
+  _renderSwitcher() {
+    const show = this._showSwitcher();
+    this.$switcher.hidden = !show;
+    if (!show) {
+      this._setSwitcher(false, { focus: false });
+      return;
+    }
+    const labels = this._labels;
+    const current = this._conversations.find((c) => String(c.id) === this.active);
+    const title = current?.title || labels.untitled;
+    this.$switchLabel.textContent = title;
+    this.$switchButton.setAttribute('aria-label', `${labels.conversations}: ${title}`);
+    this.$switchButton.title = labels.conversations;
+    this.$switchNew.setAttribute('aria-label', labels.newChat);
+    this.$switchNew.title = labels.newChat;
+    this.$switchPop.setAttribute('aria-label', labels.conversations);
+  }
+
   _render() {
     const labels = this._labels;
     this.$heading.textContent = this.getAttribute('heading') || '';
     this.$close.hidden = !this.closable;
     this.$close.setAttribute('aria-label', labels.close);
     this.$close.title = labels.close;
+    this._renderSwitcher();
+    this._convList.render();
     this.$emptyTitle.textContent = this.getAttribute('empty-title') || '';
     this.$emptyText.textContent = this.getAttribute('empty-text') || '';
     const plain = this._plain();

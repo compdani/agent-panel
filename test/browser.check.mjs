@@ -512,6 +512,68 @@ try {
         panel.style.cssText = '';
         document.body.append(panel);
         host.remove();
+
+        // Load more and the switcher: the page never shows the panel's switcher.
+        let more = 0;
+        panel.addEventListener('agent-load-more', () => { more += 1; });
+        panel.setAttribute('conversations-menu', '');
+        panel.hasMore = true;
+        await tick();
+        assert(root.querySelector('[part=switcher]').hidden, 'page hides the panel switcher');
+        root.querySelector('.convs [part=load-more]').click();
+        assert(more === 1, 'sidebar Load more fires agent-load-more');
+        panel.hasMore = false;
+        panel.removeAttribute('conversations-menu');
+        await tick();
+        assert(!root.querySelector('[part=load-more]'), 'Load more hidden without has-more');
+      } else if (!appMode) {
+        // <agent-panel conversations-menu>: a switcher over the same list.
+        const switcher = root.querySelector('[part=switcher]');
+        assert(switcher.hidden, 'switcher hidden without conversations-menu');
+        panel.setAttribute('conversations-menu', '');
+        panel.conversations = [
+          { id: 'c1', title: 'First chat', updated: new Date().toISOString() },
+          { id: 'c2', title: '' },
+        ];
+        panel.active = 'c2';
+        await tick();
+        assert(!switcher.hidden, 'switcher shown with conversations-menu');
+        const button = root.querySelector('[part=switcher-button]');
+        assert(button.textContent.includes('New chat'), 'untitled active conversation uses the untitled label');
+        panel.active = 'c1';
+        await tick();
+        assert(button.textContent.includes('First chat'), 'switcher shows the active title');
+        button.click();
+        const pop = root.querySelector('[part=switcher-menu]');
+        assert(!pop.hidden && button.getAttribute('aria-expanded') === 'true', 'switcher opens');
+        assert(root.activeElement?.getAttribute('aria-current') === 'page', 'opening focuses the active row');
+        const events = [];
+        ['agent-select-conversation', 'agent-delete-conversation', 'agent-new-conversation', 'agent-load-more']
+          .forEach((type) => panel.addEventListener(type, (e) => events.push([type, e.detail?.id])));
+        pop.querySelector('[data-conversation-id="c2"] [data-action=delete]').click();
+        assert(root.activeElement?.dataset.action === 'confirm-delete', 'switcher delete asks first');
+        root.activeElement.click();
+        assert(events.at(-1)[0] === 'agent-delete-conversation' && events.at(-1)[1] === 'c2', 'switcher delete fires');
+        assert(!pop.hidden, 'deleting keeps the switcher open');
+        pop.querySelector('[data-conversation-id="c2"] .conv-link').click();
+        assert(events.at(-1)[0] === 'agent-select-conversation' && pop.hidden, 'selecting fires and closes');
+        panel.hasMore = true;
+        panel.openConversations();
+        await tick();
+        pop.querySelector('[part=load-more]').click();
+        assert(events.at(-1)[0] === 'agent-load-more', 'switcher Load more fires');
+        pop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        assert(pop.hidden && root.activeElement === button, 'Escape closes and refocuses the button');
+        panel.openConversations();
+        document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+        assert(pop.hidden, 'outside press closes the switcher');
+        root.querySelector('[part=switcher-new]').click();
+        assert(events.at(-1)[0] === 'agent-new-conversation', 'switcher New chat fires');
+        panel.removeAttribute('conversations-menu');
+        panel.hasMore = false;
+        panel.conversations = [];
+        await tick();
+        assert(switcher.hidden, 'switcher hides again');
       }
     }, tag);
     console.log(`${tag}: browser checks passed (${engine})`);

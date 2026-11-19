@@ -1,6 +1,6 @@
 {
   "name": "agent-panel",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Framework-free Web Components for AI agent chat: <agent-panel> (side panel) and <agent-page> (full page with conversations). Paste/drop attachments, mentions, references.",
   "type": "module",
   "main": "./index.js",
