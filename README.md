@@ -1085,3 +1085,8 @@ textarea. Tests that select `textarea` should select `[part=input]` instead.
   `context-threshold`, `openContextUsage()` / `closeContextUsage()` and the
   `agent-compact` event, so a conversation nearing its model's context window can be
   compacted with one click. `formatTokens()` is exported.
+
+## New in 0.5.1
+
+- `COMPATIBILITY.md` now ships with the package and says, for every release since 0.2.1,
+  what an existing host has to change (often nothing). Read it before upgrading.
