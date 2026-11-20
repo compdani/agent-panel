@@ -668,8 +668,11 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
 - **Release.**
   1. Bump `version` in `package.json`. While it's `0.x`, a breaking change raises the
      minor version and everything else the patch version.
-  2. Commit, tag `v<version>`, then `git push && git push --tags`.
-  3. Apps pick up the release with `npm install github:compdani/agent-panel#v<version>`.
+  2. Add a section for the version to `COMPATIBILITY.md`: everything removed, renamed,
+     moved or behaving differently for an existing host, and how to keep the old
+     behaviour. Write "Nothing to change" when that is the answer; never skip it.
+  3. Commit, tag `v<version>`, then `git push && git push --tags`.
+  4. Apps pick up the release with `npm install github:compdani/agent-panel#v<version>`.
 - **Docs.** Keep `README.md` (for people) and this file (the contract) in step with the
   code in the same commit.
 
@@ -760,3 +763,8 @@ filled when an element is assigned to it, or a text node that isn't just whitesp
   `context-usage`, `context-usage-button`, `context-usage-card` and `context-compact`,
   the labels `compact`, `compactHint`, `compacting`, `context`, `contextSummarized`,
   `contextTokens` and `contextUsed`, and the exported `formatTokens()`.
+
+## 0.5.1
+
+- Packaging and docs only: `COMPATIBILITY.md` ships in the package and has a section for
+  every release since 0.2.1, and the release steps above now require one per release.
